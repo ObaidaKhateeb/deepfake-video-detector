@@ -16,10 +16,17 @@ Score: 0 = all claims verified or no verifiable claims found
 """
 
 import os
+import sys
 import base64
 import json
 import re
-from typing import List, Tuple
+import datetime
+import subprocess
+import urllib.request
+import urllib.error
+from typing import List, Optional, Tuple
+
+_DEBUG = "--debug" in sys.argv
 
 import cv2
 import numpy as np
@@ -35,7 +42,7 @@ except ImportError:
 try:
     import whisper
     _HAS_WHISPER = True
-except ImportError:
+except Exception:
     _HAS_WHISPER = False
 
 try:
@@ -45,6 +52,8 @@ except ImportError:
     _HAS_DDGS = False
 
 _MAX_VISUAL_FRAMES = 15
+_MIN_FRAME_GAP_SEC = 3.0
+_VISUAL_DIFF_THRESHOLD = 10.0
 
 _CLAIMS_SCHEMA = {
     "type": "object",
@@ -62,8 +71,19 @@ _CLAIMS_SCHEMA = {
                 "additionalProperties": False,
             },
         },
+        "context": {
+            "type": "object",
+            "properties": {
+                "claimed_dates":     {"type": "array", "items": {"type": "string"}},
+                "claimed_locations": {"type": "array", "items": {"type": "string"}},
+                "claimed_source":    {"type": "string"},
+                "transcript_language": {"type": "string"},
+            },
+            "required": ["claimed_dates", "claimed_locations", "claimed_source", "transcript_language"],
+            "additionalProperties": False,
+        },
     },
-    "required": ["claims"],
+    "required": ["claims", "context"],
     "additionalProperties": False,
 }
 
@@ -86,28 +106,32 @@ def _transcribe_audio(video_path: str) -> str:
         return ""
 
 
-# ── Approach 2: dense frame sampling ─────────────────────────────────────────
+# ── Approach 2: frame sampling ────────────────────────────────────────────────
 
-def _sample_frames_dense(frames: List[np.ndarray], video_path: str) -> List[np.ndarray]:
-    """
-    Sample ~one frame per second so that lower-thirds and text overlays that
-    appear briefly are not skipped. Falls back to a uniform 5-frame sample when
-    no video path is provided. Capped at _MAX_VISUAL_FRAMES to stay within the
-    API's context limits.
-    """
+def _sample_frames(frames: List[np.ndarray], video_path: str) -> List[np.ndarray]:
     cap = cv2.VideoCapture(video_path)
     fps = cap.get(cv2.CAP_PROP_FPS) if cap.isOpened() else 0.0
     cap.release()
     fps = fps if fps > 0 else 30.0
 
-    step = max(1, int(fps))
-    sampled = frames[::step]
+    min_gap = int(fps * _MIN_FRAME_GAP_SEC)
+    sampled: List[np.ndarray] = []
+    last_idx = -min_gap
+    last_gray: np.ndarray | None = None
 
-    if len(sampled) > _MAX_VISUAL_FRAMES:
-        step2 = max(1, len(sampled) // _MAX_VISUAL_FRAMES)
-        sampled = sampled[::step2][:_MAX_VISUAL_FRAMES]
+    for i, frame in enumerate(frames):
+        if i - last_idx < min_gap:
+            continue
+        gray = cv2.resize(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), (64, 64))
+        diff = 0.0 if last_gray is None else float(np.mean(np.abs(gray.astype(float) - last_gray.astype(float))))
+        if last_gray is None or diff >= _VISUAL_DIFF_THRESHOLD:
+            sampled.append(frame)
+            last_idx = i
+            last_gray = gray
+            if len(sampled) >= _MAX_VISUAL_FRAMES:
+                break
 
-    return sampled if len(sampled) > 0 else frames[:1]
+    return sampled if sampled else frames[:1]
 
 
 def _frame_to_base64(frame: np.ndarray) -> str:
@@ -151,22 +175,29 @@ def _extract_claims(frames: List[np.ndarray], transcript: str, api_key: str) -> 
         )
 
     lines.append(
-        "Extract every verifiable factual claim found in EITHER the transcript OR the frames.\n"
-        "A claim can be anything checkable against real-world sources, for example:\n"
-        "  - A person's name, title, or role (e.g. 'John Smith is the CEO of Acme Corp')\n"
-        "  - A statistic or number (e.g. 'unemployment is at 3.5%')\n"
-        "  - An event or date (e.g. 'the earthquake struck on March 4th')\n"
-        "  - A location or geography (e.g. 'the factory is in Detroit')\n"
-        "  - An organizational or institutional fact (e.g. 'WHO declared a pandemic')\n"
-        "  - A quote attributed to someone\n"
-        "  - Any other assertable fact that could be confirmed or refuted\n\n"
-        "For each claim provide:\n"
-        "  - statement:    the exact factual assertion as it appears in the content\n"
-        "  - search_query: a concise web search query that would verify or refute it\n"
-        "  - category:     a short label describing the claim type "
-        "(e.g. 'person', 'statistic', 'event', 'location', 'quote', 'organization', etc.)\n\n"
-        "Return ONLY the JSON object matching the schema. "
-        "If nothing verifiable is present, return an empty claims array."
+        "You are helping detect misinformation and deepfakes. Your response has two parts.\n\n"
+        "PART 1 — claims: Extract only claims that assert something about the real world "
+        "that could be fabricated or manipulated.\n"
+        "A qualifying claim must:\n"
+        "  1. Be about a real-world entity or event that exists independently of this video\n"
+        "  2. Be checkable against an independent source (news, official records, encyclopedias)\n"
+        "  3. Be something that, if false, would suggest the video is misleading or manipulated\n"
+        "Examples: a named person's identity/role, a world event or announcement, "
+        "a published statistic, a quote attributed to a public figure, an institutional fact.\n"
+        "Do NOT include claims only meaningful within this specific video with no external source.\n"
+        "For each claim: statement (the assertion), search_query (web query to verify it), "
+        "category ('person', 'event', 'statistic', 'quote', 'institution').\n\n"
+        "PART 2 — context (for metadata cross-checking):\n"
+        "  - claimed_dates:     list of any dates or time references mentioned "
+        "(e.g. 'March 4th 2024', 'last Tuesday', 'in 2019')\n"
+        "  - claimed_locations: list of any locations or places mentioned "
+        "(e.g. 'Paris', 'the White House', 'northern Gaza')\n"
+        "  - claimed_source:    how the video presents itself — describe in a few words "
+        "(e.g. 'personal phone recording', 'TV news broadcast', 'CCTV footage', 'documentary', "
+        "'unknown')\n"
+        "  - transcript_language: language of any spoken content (e.g. 'English', 'Arabic', "
+        "or '' if no speech)\n\n"
+        "Return ONLY the JSON object matching the schema."
     )
 
     content.append({"type": "text", "text": "\n".join(lines)})
@@ -186,7 +217,7 @@ def _extract_claims(frames: List[np.ndarray], transcript: str, api_key: str) -> 
         try:
             return json.loads(cleaned)
         except json.JSONDecodeError:
-            return {"claims": []}
+            return {"claims": [], "context": {"claimed_dates": [], "claimed_locations": [], "claimed_source": "", "transcript_language": ""}}
 
 
 # ── Web verification ──────────────────────────────────────────────────────────
@@ -252,9 +283,220 @@ def _verify_claim(statement: str, search_query: str, category: str) -> Tuple[flo
         return 0.65, details
 
 
+# ── Metadata reading ─────────────────────────────────────────────────────────
+
+def _read_video_metadata(video_path: str) -> dict:
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-print_format", "json",
+             "-show_format", "-show_streams", video_path],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode != 0:
+            return {}
+        data = json.loads(result.stdout)
+    except Exception:
+        return {}
+
+    fmt = data.get("format", {})
+    tags = {k.lower(): v for k, v in fmt.get("tags", {}).items()}
+    streams = data.get("streams", [])
+    audio_streams = [s for s in streams if s.get("codec_type") == "audio"]
+
+    location_raw = (
+        tags.get("com.apple.quicktime.location.iso6709", "") or
+        tags.get("location", "") or
+        tags.get("location-eng", "")
+    )
+    gps: Optional[dict] = None
+    if location_raw:
+        m = re.match(r'([+-]\d+\.?\d*)([+-]\d+\.?\d*)', location_raw)
+        if m:
+            gps = {"lat": float(m.group(1)), "lon": float(m.group(2))}
+
+    audio_lang = ""
+    if audio_streams:
+        audio_lang = audio_streams[0].get("tags", {}).get("language", "")
+
+    return {
+        "creation_time": tags.get("creation_time", ""),
+        "gps": gps,
+        "make":  tags.get("com.apple.quicktime.make", "") or tags.get("make", ""),
+        "model": tags.get("com.apple.quicktime.model", "") or tags.get("model", ""),
+        "encoder": tags.get("encoder", "") or tags.get("com.apple.quicktime.software", ""),
+        "audio_language": audio_lang,
+    }
+
+
+def _reverse_geocode(lat: float, lon: float) -> str:
+    try:
+        url = f"https://nominatim.openstreetmap.org/reverse?lat={lat}&lon={lon}&format=json&zoom=5"
+        req = urllib.request.Request(url, headers={"User-Agent": "deepfake-detector/1.0"})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode())
+        addr = data.get("address", {})
+        parts = [addr.get("country", ""), addr.get("state", ""), addr.get("city", "")]
+        return ", ".join(p for p in parts if p)
+    except Exception:
+        return ""
+
+
+# ── Metadata cross-checks ─────────────────────────────────────────────────────
+
+def _crosscheck_date(claimed_dates: List[str], creation_time: str) -> Tuple[float, List[str]]:
+    details: List[str] = []
+    if not creation_time or not claimed_dates:
+        return 0.0, details
+    try:
+        ct = datetime.datetime.fromisoformat(creation_time.replace("Z", "+00:00"))
+    except Exception:
+        return 0.0, details
+
+    creation_year = ct.year
+    years: set = set()
+    for d in claimed_dates:
+        for y in re.findall(r'\b(20\d{2}|19\d{2})\b', d):
+            years.add(int(y))
+
+    if not years:
+        details.append(f"[date] Dates mentioned but no specific year to cross-check (file: {creation_year}).")
+        return 0.0, details
+
+    if creation_year not in years:
+        diff = min(abs(y - creation_year) for y in years)
+        if diff >= 2:
+            details.append(
+                f"[date] DATE MISMATCH: content references {sorted(years)} "
+                f"but file was created in {creation_year}."
+            )
+            return 0.8, details
+        details.append(
+            f"[date] DATE WARNING: content references {sorted(years)}, file created {creation_year}."
+        )
+        return 0.3, details
+
+    details.append(f"[date] Consistent: content year(s) {sorted(years)} match file creation year {creation_year}.")
+    return 0.0, details
+
+
+def _crosscheck_location(claimed_locations: List[str], gps: Optional[dict]) -> Tuple[float, List[str]]:
+    details: List[str] = []
+    if not gps or not claimed_locations:
+        return 0.0, details
+
+    lat, lon = gps["lat"], gps["lon"]
+    geo_str = _reverse_geocode(lat, lon)
+    if not geo_str:
+        details.append(f"[location] GPS ({lat:.4f}, {lon:.4f}) — could not resolve to a region.")
+        return 0.0, details
+
+    details.append(f"[location] GPS resolves to: {geo_str}")
+    geo_lower = geo_str.lower()
+
+    matches, mismatches = [], []
+    for loc in claimed_locations:
+        words = [w for w in loc.lower().split() if len(w) > 3]
+        (matches if any(w in geo_lower for w in words) else mismatches).append(loc)
+
+    if mismatches and not matches:
+        details.append(f"[location] LOCATION MISMATCH: claimed {mismatches} but GPS points to {geo_str}.")
+        return 0.75, details
+    if matches:
+        details.append(f"[location] Consistent: {matches} matches GPS region.")
+    return 0.0, details
+
+
+def _crosscheck_source(claimed_source: str, encoder: str, make: str, model: str) -> Tuple[float, List[str]]:
+    details: List[str] = []
+    if not claimed_source:
+        return 0.0, details
+
+    src = claimed_source.lower()
+    official_keywords = {"broadcast", "news", "cctv", "surveillance", "official",
+                         "government", "press", "conference", "agency"}
+    is_official = any(k in src for k in official_keywords)
+    has_device = bool(make or model)
+    is_reencoded = any(e in encoder.lower() for e in ("lavf", "libav", "ffmpeg"))
+
+    if is_official and has_device:
+        details.append(
+            f"[source] MISMATCH: content presents as official/broadcast footage "
+            f"but was recorded on a personal device ({(make + ' ' + model).strip()})."
+        )
+        return 0.7, details
+    if is_official and is_reencoded:
+        details.append(
+            f"[source] WARNING: content claims official footage but encoder is '{encoder}' "
+            "(common in re-encoded or AI-generated video)."
+        )
+        return 0.5, details
+    if has_device:
+        details.append(f"[source] Recorded on: {(make + ' ' + model).strip()}.")
+    return 0.0, details
+
+
+def _crosscheck_missing_metadata(creation_time: str, encoder: str, make: str, model: str) -> Tuple[float, List[str]]:
+    details: List[str] = []
+    missing = []
+    if not creation_time:
+        missing.append("creation timestamp")
+    if not encoder:
+        missing.append("encoder tag")
+    if not make and not model:
+        missing.append("device info")
+
+    if len(missing) >= 2:
+        details.append(
+            f"[metadata] STRIPPED METADATA: missing {', '.join(missing)} — "
+            "common in AI-generated or re-processed video."
+        )
+        return 0.5, details
+    if missing:
+        details.append(f"[metadata] Partial metadata: missing {missing[0]}.")
+        return 0.2, details
+    return 0.0, details
+
+
+def _crosscheck_language(transcript_language: str, gps: Optional[dict], geo_str: str) -> Tuple[float, List[str]]:
+    details: List[str] = []
+    if transcript_language:
+        details.append(f"[language] Detected spoken language: {transcript_language}.")
+    return 0.0, details
+
+
+# ── DEBUG: remove this entire section before production ──────────────────────
+
+_DEBUG_PATH = os.path.join(os.path.dirname(__file__), "..", "content_verification_debug.json")
+
+def _save_debug(extracted: dict, transcript: str, video_path: str, meta: dict) -> None:
+    # DEBUG: appends extracted claims + metadata to content_verification_debug.json at project root
+    record = {
+        "timestamp": datetime.datetime.now().isoformat(),
+        "video_path": video_path,
+        "transcript_preview": transcript[:300] if transcript else "",
+        "claims": extracted.get("claims", []),
+        "context": extracted.get("context", {}),
+        "metadata": meta,
+    }
+    try:
+        existing: list = []
+        debug_path = os.path.abspath(_DEBUG_PATH)
+        if os.path.isfile(debug_path):
+            with open(debug_path, "r", encoding="utf-8") as f:
+                existing = json.load(f)
+        existing.append(record)
+        with open(debug_path, "w", encoding="utf-8") as f:
+            json.dump(existing, f, indent=2, ensure_ascii=False)
+        print(f"[content_verification] debug saved → {debug_path}")  # DEBUG: remove before production
+    except Exception as e:
+        print(f"[content_verification] debug save failed: {e}")  # DEBUG: remove before production
+
+# ── END DEBUG ─────────────────────────────────────────────────────────────────
+
+
 # ── Public entry point ────────────────────────────────────────────────────────
 
-def analyze(frames: List[np.ndarray], video_path: str = "") -> AnalyzerResult:
+def analyze(frames: List[np.ndarray], video_path: str = "", meta: Optional[dict] = None) -> AnalyzerResult:
     label = "Content Verification"
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
 
@@ -307,10 +549,10 @@ def analyze(frames: List[np.ndarray], video_path: str = "") -> AnalyzerResult:
         else:
             details.append("Approach 1 (audio): skipped — no video path supplied.")
 
-        # ── Approach 2: dense frame sampling ─────────────────────────────────
+        # ── Approach 2: frame sampling ────────────────────────────────────────
         if video_path:
-            details.append("Approach 2 (visual): sampling frames at ~1 fps...")
-            sampled = _sample_frames_dense(frames, video_path)
+            details.append("Approach 2 (visual): sampling visually distinct frames (min 3s gap)...")
+            sampled = _sample_frames(frames, video_path)
         else:
             details.append("Approach 2 (visual): no video path — using uniform 5-frame fallback.")
             sampled = frames[::max(1, len(frames) // 5)][:5]
@@ -332,22 +574,42 @@ def analyze(frames: List[np.ndarray], video_path: str = "") -> AnalyzerResult:
             f"Sending {' + '.join(sources)} to Claude AI for claim extraction..."
         )
 
-        extracted = _extract_claims(sampled, transcript, api_key)
+        # ── Read file metadata ────────────────────────────────────────────────
+        if meta is None:
+            meta = _read_video_metadata(video_path) if video_path else {}
+        if meta:
+            details.append(
+                f"File metadata: creation={meta.get('creation_time') or 'missing'}, "
+                f"device={((meta.get('make','') + ' ' + meta.get('model','')).strip()) or 'missing'}, "
+                f"encoder={meta.get('encoder') or 'missing'}, "
+                f"gps={'yes' if meta.get('gps') else 'none'}."
+            )
+        else:
+            details.append("File metadata: ffprobe unavailable — metadata cross-checks skipped.")
+
+        try:
+            extracted = _extract_claims(sampled, transcript, api_key)
+        except Exception as api_exc:
+            if _DEBUG:
+                _save_debug({"claims": [], "error": str(api_exc)}, transcript, video_path, meta)
+            raise
+
+        if _DEBUG:
+            _save_debug(extracted, transcript, video_path, meta)
 
         claim_list = extracted.get("claims", [])
+        ctx        = extracted.get("context", {})
 
-        if not claim_list:
+        if not claim_list and not ctx.get("claimed_dates") and not ctx.get("claimed_locations"):
             return AnalyzerResult(
                 label=label, score=0.2, confidence=0.5,
-                details=details + [
-                    "No verifiable factual claims found in either audio or visual content.",
-                ],
+                details=details + ["No verifiable factual claims found in either audio or visual content."],
             )
 
         details.append(f"Extracted {len(claim_list)} verifiable claim(s).")
 
         # ── Web verification ──────────────────────────────────────────────────
-        details.append("Verifying claims against web sources...")
+        details.append("\nVerifying claims against web sources...")
         scores: List[float] = []
 
         for claim in claim_list:
@@ -361,10 +623,30 @@ def analyze(frames: List[np.ndarray], video_path: str = "") -> AnalyzerResult:
             scores.append(score)
             details.extend(f"    {s}" for s in sub)
 
+        # ── Metadata cross-checks ─────────────────────────────────────────────
+        if meta:
+            details.append("\nCross-checking content against file metadata...")
+
+            geo_str = ""
+            gps = meta.get("gps")
+
+            for fn, args in [
+                (_crosscheck_date,             (ctx.get("claimed_dates", []),    meta.get("creation_time", ""))),
+                (_crosscheck_location,         (ctx.get("claimed_locations", []), gps)),
+                (_crosscheck_source,           (ctx.get("claimed_source", ""),   meta.get("encoder", ""), meta.get("make", ""), meta.get("model", ""))),
+                (_crosscheck_missing_metadata, (meta.get("creation_time", ""),   meta.get("encoder", ""), meta.get("make", ""), meta.get("model", ""))),
+                (_crosscheck_language,         (ctx.get("transcript_language", ""), gps, geo_str)),
+            ]:
+                s, sub = fn(*args)
+                if sub:
+                    if s > 0.0:
+                        scores.append(s)
+                    details.extend(f"  {line}" for line in sub)
+
         if not scores:
             return AnalyzerResult(
                 label=label, score=0.3, confidence=0.3,
-                details=details + ["Claims extracted but none could be verified."],
+                details=details + ["Claims extracted but none could be scored."],
             )
 
         avg_score   = float(np.mean(scores))
@@ -373,7 +655,7 @@ def analyze(frames: List[np.ndarray], video_path: str = "") -> AnalyzerResult:
         confidence  = min(1.0, len(scores) * 0.25 + 0.25)
 
         details.append(
-            f"\nSummary: {len(scores)} entity/entities checked — "
+            f"\nSummary: {len(scores)} check(s) — "
             f"avg suspicion {avg_score:.2f}, max {max_score:.2f}."
         )
         details.append("Score key: 0 = verified real, 1 = claims actively contradicted.")

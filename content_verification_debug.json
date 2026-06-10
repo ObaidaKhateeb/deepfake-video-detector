@@ -1,0 +1,166 @@
+[
+  {
+    "timestamp": "2026-06-10T18:01:16.143512",
+    "video_path": "C:/Users/okhatib/Downloads/a955017b6d5751725b1a73689b004afb8d5feaa7.mov",
+    "transcript_preview": "",
+    "claims": [
+      {
+        "statement": "The website grinta.co.il sells football jerseys",
+        "search_query": "grinta.co.il football jerseys store",
+        "category": "organization"
+      },
+      {
+        "statement": "Germany 2026 home jersey is priced at 109.00 NIS",
+        "search_query": "Germany 2026 home jersey price NIS",
+        "category": "statistic"
+      },
+      {
+        "statement": "Brazil 2026 home jersey is priced at 109.00 NIS",
+        "search_query": "Brazil 2026 home jersey price",
+        "category": "statistic"
+      },
+      {
+        "statement": "Spain 2026 home jersey is priced at 109.00 NIS",
+        "search_query": "Spain 2026 home jersey price",
+        "category": "statistic"
+      },
+      {
+        "statement": "Netherlands 2026 home jersey is priced at 109.00 NIS",
+        "search_query": "Netherlands 2026 home jersey price",
+        "category": "statistic"
+      },
+      {
+        "statement": "France 2026 home jersey is priced at 109.00 NIS",
+        "search_query": "France 2026 home jersey price",
+        "category": "statistic"
+      },
+      {
+        "statement": "Portugal 2026 home jersey is priced at 109.00 NIS",
+        "search_query": "Portugal 2026 home jersey price",
+        "category": "statistic"
+      },
+      {
+        "statement": "The Spain national team jersey features Adidas branding",
+        "search_query": "Spain national team jersey Adidas manufacturer",
+        "category": "organization"
+      },
+      {
+        "statement": "The Netherlands national team jersey features Nike branding",
+        "search_query": "Netherlands national team jersey Nike manufacturer",
+        "category": "organization"
+      },
+      {
+        "statement": "The France national team jersey features Nike branding",
+        "search_query": "France national team jersey Nike manufacturer",
+        "category": "organization"
+      },
+      {
+        "statement": "The Portugal national team jersey features Puma branding",
+        "search_query": "Portugal national team jersey Puma manufacturer",
+        "category": "organization"
+      },
+      {
+        "statement": "Bayern Munich 26/27 home jersey is priced at 109.00 NIS",
+        "search_query": "Bayern Munich 26/27 home jersey price",
+        "category": "statistic"
+      },
+      {
+        "statement": "The Bayern Munich jersey features Adidas branding and T-Mobile/Telekom sponsor",
+        "search_query": "Bayern Munich home jersey Adidas Telekom sponsor",
+        "category": "organization"
+      },
+      {
+        "statement": "The cart subtotal is 327.00 NIS",
+        "search_query": "grinta jersey cart subtotal calculation",
+        "category": "statistic"
+      },
+      {
+        "statement": "The store accepts JCB, Diners Club, Discover, AMEX, Mastercard, Visa, Apple Pay, and PayPal",
+        "search_query": "grinta.co.il accepted payment methods",
+        "category": "organization"
+      }
+    ]
+  },
+  {
+    "timestamp": "2026-06-10T18:14:19.705799",
+    "video_path": "C:/Users/okhatib/Downloads/a955017b6d5751725b1a73689b004afb8d5feaa7.mov",
+    "transcript_preview": "",
+    "claims": [
+      {
+        "statement": "The website grinta.co.il sells football jerseys",
+        "search_query": "grinta.co.il football jerseys store",
+        "category": "organization"
+      },
+      {
+        "statement": "The Germany 2026 home jersey is priced at 109.00 ₪",
+        "search_query": "grinta Germany 2026 home jersey price",
+        "category": "statistic"
+      },
+      {
+        "statement": "The Brazil 2026 home jersey is priced at 109.00 ₪",
+        "search_query": "grinta Brazil 2026 home jersey price",
+        "category": "statistic"
+      },
+      {
+        "statement": "The Spain 2026 home jersey is priced at 109.00 ₪",
+        "search_query": "grinta Spain 2026 home jersey price",
+        "category": "statistic"
+      },
+      {
+        "statement": "The Netherlands 2026 home jersey is priced at 109.00 ₪",
+        "search_query": "grinta Netherlands 2026 home jersey price",
+        "category": "statistic"
+      },
+      {
+        "statement": "The France 2026 home jersey is priced at 109.00 ₪",
+        "search_query": "grinta France 2026 jersey price",
+        "category": "statistic"
+      },
+      {
+        "statement": "The Portugal 2026 home jersey is priced at 109.00 ₪",
+        "search_query": "grinta Portugal 2026 home jersey price",
+        "category": "statistic"
+      },
+      {
+        "statement": "The Spain national team jersey is made by Adidas",
+        "search_query": "Spain national team jersey Adidas manufacturer",
+        "category": "organization"
+      },
+      {
+        "statement": "The Netherlands national team jersey is made by Nike",
+        "search_query": "Netherlands national team jersey Nike manufacturer",
+        "category": "organization"
+      },
+      {
+        "statement": "The France national team jersey is made by Nike",
+        "search_query": "France national team jersey Nike manufacturer",
+        "category": "organization"
+      },
+      {
+        "statement": "The Portugal national team jersey is made by Puma",
+        "search_query": "Portugal national team jersey Puma manufacturer",
+        "category": "organization"
+      },
+      {
+        "statement": "The Bayern Munich 26/27 home jersey is priced at 109.00 ₪",
+        "search_query": "grinta Bayern Munich 26/27 home jersey price",
+        "category": "statistic"
+      },
+      {
+        "statement": "The Bayern Munich home jersey features the T-Mobile (Telekom) sponsor and is made by Adidas",
+        "search_query": "Bayern Munich home jersey Adidas Telekom sponsor",
+        "category": "organization"
+      },
+      {
+        "statement": "The shopping cart subtotal is 327.00 ₪",
+        "search_query": "grinta cart subtotal calculation jerseys 109",
+        "category": "statistic"
+      },
+      {
+        "statement": "The website accepts JCB, Diners Club, Discover, AMEX, Mastercard, Visa, Apple Pay, and PayPal",
+        "search_query": "grinta.co.il accepted payment methods",
+        "category": "organization"
+      }
+    ]
+  }
+]
