@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "Deepfake Video Detector",
+  "version": "1.0",
+  "description": "Detect deepfake / synthetic videos on any webpage using your local analysis server.",
+
+  "permissions": ["activeTab"],
+  "host_permissions": [
+    "<all_urls>",
+    "http://127.0.0.1:7177/*"
+  ],
+
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "css": ["styles.css"],
+      "run_at": "document_idle"
+    }
+  ],
+
+  "background": {
+    "service_worker": "background.js"
+  },
+
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Deepfake Video Detector"
+  }
+}
