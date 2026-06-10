@@ -29,61 +29,61 @@ A desktop GUI tool that analyzes a video file and outputs a **fake probability s
 
 ---
 
-## Install & Run
-
-    pip install opencv-python-headless numpy scipy Pillow PyQt5
-
-    # Optional — enables deep metadata analysis
-    # Ubuntu/Debian: sudo apt install ffmpeg
-    # Windows: download from https://ffmpeg.org
+## Run
 
     python main.py
 
-### Content Verification (optional but recommended)
+All required packages are installed automatically on first run — no manual `pip install` needed.
+Restart after the first run is handled automatically as well.
 
-The **Content Verification** analyzer extracts factual claims from the video using two
-complementary approaches that run side by side:
+> **Python 3.14+:** audio transcription via Whisper is skipped because PyTorch does not yet
+> support Python 3.14. All other analyzers work normally.
 
-- **Approach 1 — Audio:** the full audio track is transcribed locally by
-  [Whisper](https://github.com/openai/whisper), capturing every spoken claim
-  (names, titles, organizations said out loud).
-- **Approach 2 — Visual:** frames are sampled at ~1 fps (instead of 5 arbitrary images)
-  so that on-screen text, lower-thirds, and name plates are reliably captured throughout
-  the video.
+### ffmpeg (optional)
 
-Both the transcript and the dense frames are sent together to Claude AI, which extracts every
-verifiable factual claim. Those claims are then checked against live web search results.
-For example, if someone says *"I'm John Smith, CEO of Acme Corp"* or a lower-third displays
-that text, the analyzer will verify that the person, company, and role are real and consistent.
+Installing [ffmpeg](https://ffmpeg.org) enables deep metadata analysis and audio transcription:
 
-To enable it:
+    # Ubuntu / Debian
+    sudo apt install ffmpeg
 
-1. Install the extra dependencies:
+    # Windows — download from https://ffmpeg.org and add the bin/ folder to PATH
 
-       pip install anthropic duckduckgo_search openai-whisper
+### Content Verification
 
-   Whisper also requires **ffmpeg** to decode the audio track:
+The **Content Verification** analyzer uses Claude AI to extract verifiable factual claims
+from the video and cross-checks them against live web search results and the file's own
+metadata. It uses two complementary sources:
 
-       # Ubuntu/Debian
-       sudo apt install ffmpeg
-       # Windows — download from https://ffmpeg.org and add to PATH
+- **Audio** — the spoken transcript (via Whisper, requires ffmpeg)
+- **Visual** — frames sampled at visually distinct intervals to capture on-screen text,
+  lower-thirds, and name plates
 
-2. Set your Anthropic API key as an environment variable before launching the app:
+Claims can be anything world-verifiable: a named person's role, a news event, a statistic,
+a quote, a location. Each claim is checked against DuckDuckGo. For person + company claims,
+Apollo.io is tried first (more precise) before falling back to DuckDuckGo.
 
-       # Windows (Command Prompt)
-       set ANTHROPIC_API_KEY=your_key_here
+The analyzer also cross-checks the video's file metadata (GPS location, creation timestamp,
+device info, encoder) against what the content claims — a mismatch is a strong manipulation signal.
 
-       # Windows (PowerShell)
-       $env:ANTHROPIC_API_KEY="your_key_here"
+To enable Content Verification, set your Anthropic API key before launching:
 
-       # macOS / Linux
-       export ANTHROPIC_API_KEY=your_key_here
+    # Windows (PowerShell)
+    $env:ANTHROPIC_API_KEY = "your_key_here"
 
-   Get a key at https://console.anthropic.com
+    # macOS / Linux
+    export ANTHROPIC_API_KEY=your_key_here
 
-Each component degrades gracefully: if Whisper is not installed only the visual
-approach runs; if the API key is missing the analyzer is skipped entirely and the
-remaining seven analyzers still produce a result.
+Get a key at https://console.anthropic.com
+
+To also enable Apollo.io person verification (optional):
+
+    $env:APOLLO_API_KEY = "your_key_here"   # PowerShell
+    export APOLLO_API_KEY=your_key_here     # macOS / Linux
+
+Get a free key at https://app.apollo.io
+
+Each component degrades gracefully: if Whisper is unavailable only visual frames are used;
+if API keys are missing those features are skipped and the remaining analyzers still run.
 
 ---
 
@@ -117,4 +117,4 @@ remaining seven analyzers still produce a result.
 - All analysis is **heuristic** — no trained ML model is bundled.
 - Results are **indicative**, not forensically definitive.
 - Face-dependent analyzers (texture, sharpness) fall back gracefully when no face is detected.
-- Install `ffmpeg` for the metadata analyzer to report full encoding details.
+- Install `ffmpeg` for full metadata analysis and audio transcription.
