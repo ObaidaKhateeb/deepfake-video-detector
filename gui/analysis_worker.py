@@ -10,13 +10,14 @@ from core.video_loader import load_video
 from core.aggregator import aggregate
 from core.result import AggregatedResult, AnalyzerResult
 
-import analyzers.temporal_consistency as temporal
-import analyzers.face_texture         as face_texture
+import analyzers.temporal_consistency  as temporal
+import analyzers.face_texture          as face_texture
 import analyzers.compression_artifacts as compression
 import analyzers.noise_pattern         as noise
 import analyzers.brightness_flicker    as flicker
 import analyzers.edge_sharpness        as sharpness
 import analyzers.metadata              as metadata
+import analyzers.content_verification  as content_verification
 
 
 ANALYZER_STEPS = [
@@ -28,6 +29,7 @@ ANALYZER_STEPS = [
     "Brightness Flicker",
     "Edge Sharpness",
     "Metadata",
+    "Content Verification",
     "Aggregating results",
 ]
 
@@ -82,8 +84,14 @@ class AnalysisWorker(QThread):
             step(7, "Metadata")
             results["Metadata"] = metadata.analyze(self.video_path)
 
-            # Step 8 — aggregate
-            step(8, "Aggregating results")
+            # Step 8 — content verification (audio transcript + dense frames + web search)
+            step(8, "Content Verification")
+            results["Content Verification"] = content_verification.analyze(
+                video.frames, self.video_path
+            )
+
+            # Step 9 — aggregate
+            step(9, "Aggregating results")
             result = aggregate(results)
 
             self.progress.emit(100, "Done")

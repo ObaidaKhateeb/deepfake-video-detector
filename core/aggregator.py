@@ -13,9 +13,10 @@ WEIGHTS: Dict[str, float] = {
     "Face Texture":         0.20,
     "Compression Artifacts":0.15,
     "Noise Pattern":        0.15,
-    "Brightness Flicker":   0.10,
-    "Edge Sharpness":       0.10,
+    "Brightness Flicker":   0.05,
+    "Edge Sharpness":       0.05,
     "Metadata":             0.05,
+    "Content Verification": 0.10,
 }
 
 
