@@ -66,6 +66,8 @@ _CLAIMS_SCHEMA = {
                     "statement":    {"type": "string"},
                     "search_query": {"type": "string"},
                     "category":     {"type": "string"},
+                    "person_name":  {"type": "string"},
+                    "organization": {"type": "string"},
                 },
                 "required": ["statement", "search_query", "category"],
                 "additionalProperties": False,
@@ -186,7 +188,11 @@ def _extract_claims(frames: List[np.ndarray], transcript: str, api_key: str) -> 
         "a published statistic, a quote attributed to a public figure, an institutional fact.\n"
         "Do NOT include claims only meaningful within this specific video with no external source.\n"
         "For each claim: statement (the assertion), search_query (web query to verify it), "
-        "category ('person', 'event', 'statistic', 'quote', 'institution').\n\n"
+        "category ('person', 'event', 'statistic', 'quote', 'institution').\n"
+        "Additionally, for category 'person' claims, also fill:\n"
+        "  - person_name:  the individual's full name (e.g. 'Barack Obama')\n"
+        "  - organization: the company or institution they are associated with (e.g. 'US Government'), "
+        "or omit if none is mentioned.\n\n"
         "PART 2 — context (for metadata cross-checking):\n"
         "  - claimed_dates:     list of any dates or time references mentioned "
         "(e.g. 'March 4th 2024', 'last Tuesday', 'in 2019')\n"
@@ -231,20 +237,81 @@ def _web_snippets(query: str, max_results: int = 5) -> List[str]:
         return []
 
 
+def _verify_person_apollo(name: str, org: str) -> Tuple[Optional[float], List[str]]:
+    """
+    Look up a person by name (+ optional org) in Apollo.io.
+    Returns (None, []) to signal DuckDuckGo fallback when Apollo is not
+    configured or returns no matching record.
+    """
+    api_key = os.environ.get("APOLLO_API_KEY", "")
+    if not api_key or not name:
+        return None, []
+
+    try:
+        payload: dict = {"api_key": api_key, "q_person_name": name, "page": 1, "per_page": 3}
+        if org:
+            payload["q_organization_name"] = org
+
+        req = urllib.request.Request(
+            "https://api.apollo.io/v1/people/search",
+            data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json", "Cache-Control": "no-cache"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode())
+    except Exception:
+        return None, []
+
+    people = data.get("people", [])
+    if not people:
+        return None, []
+
+    name_words = [w for w in name.lower().split() if len(w) > 2]
+
+    for person in people:
+        found_name = person.get("name", "").lower()
+        found_org  = (person.get("organization") or {}).get("name", "").lower()
+        found_title = person.get("title", "")
+
+        name_match = any(w in found_name for w in name_words)
+        org_match  = not org or org.lower() in found_org or found_org in org.lower()
+
+        if name_match and org_match:
+            label = f"{person.get('name')} — {found_title} at {(person.get('organization') or {}).get('name', '')}"
+            return 0.0, [f"[Apollo] VERIFIED: {label}"]
+
+        if name_match and org:
+            return 0.7, [
+                f"[Apollo] MISMATCH: {person.get('name')} found but linked to "
+                f"'{found_org}', not '{org}'."
+            ]
+
+    return None, []
+
+
 _STOP_WORDS = {
     "the", "this", "that", "with", "from", "have", "been", "were", "they",
     "their", "about", "into", "which", "when", "said", "also", "some", "more",
 }
 
 
-def _verify_claim(statement: str, search_query: str, category: str) -> Tuple[float, List[str]]:
-    """
-    Generic claim verifier: searches the web using search_query and scores how
-    well the snippets support the statement using keyword overlap.
-    """
+def _verify_claim(
+    statement: str,
+    search_query: str,
+    category: str,
+    person_name: str = "",
+    organization: str = "",
+) -> Tuple[float, List[str]]:
     details: List[str] = []
     if not statement:
         return 0.3, ["Empty claim — skipped."]
+
+    # For person claims, try Apollo first — falls back to DuckDuckGo if not configured or no result
+    if category == "person" and person_name:
+        score, sub = _verify_person_apollo(person_name, organization)
+        if score is not None:
+            return score, sub
 
     snippets = _web_snippets(search_query)
     if not snippets:
@@ -619,7 +686,11 @@ def analyze(frames: List[np.ndarray], video_path: str = "", meta: Optional[dict]
             if not statement:
                 continue
             details.append(f"\n  \"{statement}\"")
-            score, sub = _verify_claim(statement, search_query, category)
+            score, sub = _verify_claim(
+                statement, search_query, category,
+                claim.get("person_name", ""),
+                claim.get("organization", ""),
+            )
             scores.append(score)
             details.extend(f"    {s}" for s in sub)
 
