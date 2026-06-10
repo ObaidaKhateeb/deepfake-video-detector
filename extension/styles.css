@@ -1,0 +1,342 @@
+/* ── Deepfake Video Detector Extension Styles ── */
+
+/* Wrapper injected around each <video> element */
+.dvd-wrapper {
+  line-height: 0; /* prevents extra space below video */
+}
+
+/* Analyse button — top-right corner of the video */
+.dvd-analyze-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 2147483640;
+  background: rgba(10, 10, 20, 0.88);
+  color: #e2e8f0;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 6px;
+  padding: 5px 11px;
+  font-size: 12px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  cursor: pointer;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  transition: background 0.15s, border-color 0.15s, opacity 0.15s;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+  line-height: 1.4;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+  opacity: 0.75;
+}
+
+.dvd-wrapper:hover .dvd-analyze-btn,
+.dvd-analyze-btn:focus {
+  opacity: 1;
+}
+
+.dvd-analyze-btn:hover {
+  background: rgba(25, 25, 50, 0.95);
+  border-color: rgba(99, 102, 241, 0.7);
+}
+
+.dvd-analyze-btn:disabled {
+  opacity: 0.65;
+  cursor: wait;
+}
+
+/* Inline spinner (inside button when analysing) */
+.dvd-spinner {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border: 2px solid rgba(255, 255, 255, 0.25);
+  border-top-color: #818cf8;
+  border-radius: 50%;
+  animation: dvd-spin 0.65s linear infinite;
+  flex-shrink: 0;
+}
+
+/* Large spinner (loading panel) */
+.dvd-spinner-lg {
+  width: 28px;
+  height: 28px;
+  border: 3px solid rgba(255, 255, 255, 0.12);
+  border-top-color: #818cf8;
+  border-radius: 50%;
+  animation: dvd-spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes dvd-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ── Results / loading panel ── */
+
+.dvd-results-panel {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 2147483641;
+  background: rgba(11, 11, 22, 0.97);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px 10px 0 0;
+  padding: 14px 16px 12px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 12px;
+  color: #e2e8f0;
+  max-height: 65%;
+  overflow-y: auto;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  box-sizing: border-box;
+  line-height: 1.5;
+}
+
+.dvd-results-panel.dvd-error {
+  background: rgba(22, 8, 8, 0.97);
+  border-color: rgba(248, 113, 113, 0.22);
+}
+
+/* Panel header */
+.dvd-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.dvd-panel-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #f1f5f9;
+  letter-spacing: 0.2px;
+}
+
+.dvd-close-btn {
+  background: none;
+  border: none;
+  color: #64748b;
+  cursor: pointer;
+  font-size: 15px;
+  padding: 2px 5px;
+  border-radius: 4px;
+  line-height: 1;
+  transition: color 0.1s, background 0.1s;
+}
+
+.dvd-close-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #f1f5f9;
+}
+
+/* Verdict row */
+.dvd-verdict-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 14px;
+}
+
+.dvd-score-circle {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 10px;
+  padding: 8px 18px;
+  min-width: 72px;
+}
+
+.dvd-score-num {
+  font-size: 26px;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: -1px;
+}
+
+.dvd-score-sub {
+  font-size: 9px;
+  color: #475569;
+  margin-top: 3px;
+  text-align: center;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.dvd-verdict-badge {
+  padding: 7px 16px;
+  border-radius: 20px;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+}
+
+.dvd-verdict-real {
+  background: rgba(74, 222, 128, 0.12);
+  color: #4ade80;
+  border: 1px solid rgba(74, 222, 128, 0.28);
+}
+
+.dvd-verdict-fake {
+  background: rgba(248, 113, 113, 0.12);
+  color: #f87171;
+  border: 1px solid rgba(248, 113, 113, 0.28);
+}
+
+.dvd-verdict-suspicious {
+  background: rgba(250, 204, 21, 0.12);
+  color: #facc15;
+  border: 1px solid rgba(250, 204, 21, 0.28);
+}
+
+/* Section title */
+.dvd-section-title {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 1.2px;
+  color: #475569;
+  font-weight: 700;
+  margin-bottom: 7px;
+}
+
+/* Parameter bars */
+.dvd-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-bottom: 12px;
+}
+
+.dvd-param-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.dvd-param-label {
+  width: 148px;
+  font-size: 11px;
+  color: #94a3b8;
+  flex-shrink: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dvd-bar-track {
+  flex: 1;
+  height: 5px;
+  background: rgba(255, 255, 255, 0.07);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.dvd-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.4s ease;
+}
+
+.dvd-param-pct {
+  width: 32px;
+  font-size: 10px;
+  color: #475569;
+  text-align: right;
+  flex-shrink: 0;
+}
+
+/* Details section */
+.dvd-details-section {
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  padding-top: 8px;
+  margin-top: 4px;
+}
+
+.dvd-details-toggle {
+  font-size: 11px;
+  color: #475569;
+  cursor: pointer;
+  list-style: none;
+  padding: 2px 0;
+  user-select: none;
+}
+
+.dvd-details-toggle::-webkit-details-marker { display: none; }
+
+.dvd-details-toggle::before {
+  content: "▶ ";
+  font-size: 9px;
+}
+
+details[open] .dvd-details-toggle::before {
+  content: "▼ ";
+}
+
+.dvd-details-toggle:hover { color: #94a3b8; }
+
+.dvd-details-content {
+  margin-top: 8px;
+  font-size: 10px;
+  color: #475569;
+  font-family: "Consolas", "Menlo", monospace;
+  line-height: 1.6;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.dvd-detail-section {
+  margin-bottom: 10px;
+}
+
+.dvd-detail-section b {
+  color: #64748b;
+  display: block;
+  margin-bottom: 2px;
+}
+
+.dvd-detail-line {
+  padding-left: 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Footer */
+.dvd-footer {
+  margin-top: 10px;
+  font-size: 9px;
+  color: #1e293b;
+  text-align: center;
+}
+
+/* Loading panel body */
+.dvd-loading-body {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 8px 0 4px;
+}
+
+.dvd-loading-text {
+  font-size: 12px;
+  color: #94a3b8;
+  line-height: 1.5;
+}
+
+.dvd-loading-sub {
+  font-size: 10px;
+  color: #475569;
+}
+
+/* Error message */
+.dvd-error-msg {
+  color: #f87171;
+  font-size: 11px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
