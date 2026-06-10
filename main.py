@@ -3,8 +3,7 @@ Fake Video Detector
 Entry point — launches the PyQt5 GUI.
 
 On first run, missing packages are installed automatically before startup.
-Whisper (audio transcription) is skipped on Python 3.14+ because PyTorch
-does not yet support it; the app runs fine without it.
+ffmpeg is bundled via imageio-ffmpeg — no manual download or PATH setup needed.
 """
 
 import importlib.util
@@ -19,11 +18,11 @@ _CORE = {
     "opencv-python":     "cv2",
     "numpy":             "numpy",
     "anthropic":         "anthropic",
-    "duckduckgo-search": "duckduckgo_search",
+    "ddgs":              "ddgs",
+    "imageio-ffmpeg":    "imageio_ffmpeg",
 }
 
-# Whisper requires PyTorch which does not support Python 3.14+
-_OPTIONAL = {} if sys.version_info >= (3, 14) else {"openai-whisper": "whisper"}
+_OPTIONAL = {"faster-whisper": "faster_whisper"}
 
 
 def _missing(packages: dict) -> list:
@@ -62,6 +61,15 @@ def _bootstrap() -> None:
 
 
 _bootstrap()
+
+# ── Inject bundled ffmpeg into PATH ──────────────────────────────────────────
+try:
+    import imageio_ffmpeg
+    _ffmpeg_dir = os.path.dirname(imageio_ffmpeg.get_ffmpeg_exe())
+    if _ffmpeg_dir not in os.environ.get("PATH", ""):
+        os.environ["PATH"] = _ffmpeg_dir + os.pathsep + os.environ.get("PATH", "")
+except Exception:
+    pass
 
 # ── Normal startup ────────────────────────────────────────────────────────────
 

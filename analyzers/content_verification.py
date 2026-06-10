@@ -27,6 +27,19 @@ import urllib.error
 from typing import List, Optional, Tuple
 
 _DEBUG = "--debug" in sys.argv
+_LOG_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "cv_debug.log")
+
+
+def _dlog(msg: str) -> None:
+    if not _DEBUG:
+        return
+    line = f"[{datetime.datetime.now().strftime('%H:%M:%S')}] {msg}\n"
+    try:
+        with open(_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(line)
+    except Exception:
+        pass
+
 
 import cv2
 import numpy as np
@@ -39,17 +52,27 @@ try:
 except ImportError:
     _HAS_ANTHROPIC = False
 
+_FasterWhisperModel = None
+_HAS_WHISPER   = False
+_WHISPER_ERROR = ""
 try:
-    import whisper
-    _HAS_WHISPER = True
-except Exception:
-    _HAS_WHISPER = False
+    import importlib.util as _ilu
+    if _ilu.find_spec("faster_whisper") is not None:
+        _HAS_WHISPER = True  # defer actual import to _load_whisper_model()
+except Exception as _e:
+    _WHISPER_ERROR = str(_e)
+
+
 
 try:
-    from duckduckgo_search import DDGS
+    from ddgs import DDGS
     _HAS_DDGS = True
 except ImportError:
-    _HAS_DDGS = False
+    try:
+        from duckduckgo_search import DDGS  # legacy fallback
+        _HAS_DDGS = True
+    except ImportError:
+        _HAS_DDGS = False
 
 _MAX_VISUAL_FRAMES = 15
 _MIN_FRAME_GAP_SEC = 3.0
@@ -92,20 +115,88 @@ _CLAIMS_SCHEMA = {
 
 # ── Approach 1: audio transcription ──────────────────────────────────────────
 
+def _get_ffmpeg_exe() -> str:
+    """Return the full path to the ffmpeg binary (bundled via imageio-ffmpeg or system)."""
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        pass
+    return "ffmpeg"  # fall back to system PATH
+
+
+def _extract_audio_wav(video_path: str) -> Optional[str]:
+    """
+    Extract audio from video to a temp WAV file using the bundled ffmpeg binary.
+    Returns the temp file path, or None on failure.
+    """
+    import tempfile
+    ffmpeg_exe = _get_ffmpeg_exe()
+    _dlog(f"ffmpeg path: {ffmpeg_exe}")
+    _dlog(f"ffmpeg exists: {os.path.isfile(ffmpeg_exe)}")
+    tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+    tmp.close()
+    try:
+        result = subprocess.run(
+            [ffmpeg_exe, "-y", "-i", video_path,
+             "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1",
+             tmp.name],
+            capture_output=True, timeout=120,
+        )
+        _dlog(f"ffmpeg returncode: {result.returncode}")
+        if result.returncode != 0:
+            _dlog(f"ffmpeg stderr: {result.stderr.decode(errors='replace')[:500]}")
+        if result.returncode == 0 and os.path.getsize(tmp.name) > 0:
+            _dlog(f"WAV extracted ok, size={os.path.getsize(tmp.name)}")
+            return tmp.name
+    except Exception as exc:
+        _dlog(f"audio extraction exception: {exc}")
+    try:
+        os.unlink(tmp.name)
+    except Exception:
+        pass
+    return None
+
+
 def _transcribe_audio(video_path: str) -> str:
     """
-    Transcribe spoken content from the video using a local Whisper model.
-    Whisper reads the audio track directly from the video file — no separate
-    extraction step needed. Requires ffmpeg to be installed.
+    Run faster-whisper in a child process to isolate DLL/torch crashes from the GUI.
+    Audio is first extracted to a temp WAV via the bundled ffmpeg binary.
     """
-    if not video_path or not os.path.isfile(video_path):
+    if not _HAS_WHISPER or not video_path or not os.path.isfile(video_path):
+        _dlog(f"_transcribe_audio skipped: has_whisper={_HAS_WHISPER} path_exists={os.path.isfile(video_path) if video_path else False}")
         return ""
+    wav_path = _extract_audio_wav(video_path)
+    if not wav_path:
+        _dlog("audio extraction returned None — no WAV to transcribe")
+        return ""
+    script = (
+        "import os, sys\n"
+        "os.environ['CUDA_VISIBLE_DEVICES']=''\n"
+        "from faster_whisper import WhisperModel\n"
+        f"m=WhisperModel('base',device='cpu',compute_type='int8')\n"
+        f"segs,_=m.transcribe({repr(wav_path)})\n"
+        "print(' '.join(s.text for s in segs).strip())"
+    )
     try:
-        model = whisper.load_model("base")
-        result = model.transcribe(video_path, fp16=False)
-        return result.get("text", "").strip()
-    except Exception:
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True, text=True, timeout=300,
+        )
+        _dlog(f"whisper subprocess returncode={result.returncode}")
+        if result.returncode != 0:
+            _dlog(f"whisper subprocess stderr: {result.stderr[:300]}")
+        text = result.stdout.strip()
+        _dlog(f"whisper transcript ({len(text)} chars): {text[:100]}")
+        return text
+    except Exception as exc:
+        _dlog(f"whisper subprocess failed: {exc}")
         return ""
+    finally:
+        try:
+            os.unlink(wav_path)
+        except Exception:
+            pass
 
 
 # ── Approach 2: frame sampling ────────────────────────────────────────────────
@@ -302,12 +393,13 @@ def _verify_claim(
     category: str,
     person_name: str = "",
     organization: str = "",
+    api_key: str = "",
 ) -> Tuple[float, List[str]]:
     details: List[str] = []
     if not statement:
         return 0.3, ["Empty claim — skipped."]
 
-    # For person claims, try Apollo first — falls back to DuckDuckGo if not configured or no result
+    # For person claims, try Apollo first
     if category == "person" and person_name:
         score, sub = _verify_person_apollo(person_name, organization)
         if score is not None:
@@ -318,44 +410,76 @@ def _verify_claim(
         details.append(f"[{category}] No web results for: {search_query}")
         return 0.5, details
 
-    combined = " ".join(snippets).lower()
-    key_words = [
-        w for w in re.findall(r"\b[a-z]{3,}\b", statement.lower())
-        if w not in _STOP_WORDS
-    ]
-
-    if not key_words:
-        details.append(f"[{category}] Results found but no specific keywords to match.")
-        return 0.2, details
-
-    matched = sum(1 for w in key_words if w in combined)
-    ratio = matched / len(key_words)
-
-    if ratio >= 0.6:
-        details.append(
-            f"[{category}] VERIFIED: {matched}/{len(key_words)} key terms found in web sources."
+    # Ask Claude to judge whether the snippets confirm or contradict the claim
+    if api_key:
+        evidence = "\n".join(f"- {s}" for s in snippets[:5])
+        prompt = (
+            f"Claim: \"{statement}\"\n\n"
+            f"Web evidence:\n{evidence}\n\n"
+            "Based only on the evidence above, does it CONFIRM, CONTRADICT, or give "
+            "INSUFFICIENT information about the claim?\n"
+            "Reply with exactly one word: CONFIRM, CONTRADICT, or INSUFFICIENT."
         )
+        try:
+            client = anthropic.Anthropic(api_key=api_key)
+            resp = client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=10,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            verdict = resp.content[0].text.strip().upper()
+            _dlog(f"claim verdict: {verdict} — {statement[:60]}")
+            if "CONFIRM" in verdict:
+                details.append(f"[{category}] VERIFIED: web evidence confirms this claim.")
+                return 0.0, details
+            elif "CONTRADICT" in verdict:
+                details.append(f"[{category}] CONTRADICTED: web evidence contradicts this claim.")
+                return 0.9, details
+            else:
+                details.append(f"[{category}] INSUFFICIENT: web evidence neither confirms nor contradicts.")
+                return 0.5, details
+        except Exception as exc:
+            _dlog(f"Claude verify failed: {exc}")
+
+    # Fallback: keyword overlap (less accurate)
+    combined = " ".join(snippets).lower()
+    key_words = [w for w in re.findall(r"\b[a-z]{3,}\b", statement.lower()) if w not in _STOP_WORDS]
+    if not key_words:
+        return 0.2, details
+    ratio = sum(1 for w in key_words if w in combined) / len(key_words)
+    if ratio >= 0.6:
+        details.append(f"[{category}] VERIFIED (keyword match).")
         return 0.0, details
     elif ratio >= 0.3:
-        details.append(
-            f"[{category}] PARTIAL: {matched}/{len(key_words)} key terms found — "
-            "claim may be inaccurate or context differs."
-        )
+        details.append(f"[{category}] PARTIAL (keyword match).")
         return 0.4, details
     else:
-        details.append(
-            f"[{category}] SUSPICIOUS: only {matched}/{len(key_words)} key terms found — "
-            "little web support for this claim."
-        )
+        details.append(f"[{category}] SUSPICIOUS (keyword match).")
         return 0.65, details
 
 
 # ── Metadata reading ─────────────────────────────────────────────────────────
 
+def _get_ffprobe_exe() -> str:
+    """Return the best available ffprobe path."""
+    try:
+        import imageio_ffmpeg
+        ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+        candidate = os.path.join(
+            os.path.dirname(ffmpeg_exe),
+            "ffprobe.exe" if sys.platform == "win32" else "ffprobe",
+        )
+        if os.path.isfile(candidate):
+            return candidate
+    except Exception:
+        pass
+    return "ffprobe"
+
+
 def _read_video_metadata(video_path: str) -> dict:
     try:
         result = subprocess.run(
-            ["ffprobe", "-v", "quiet", "-print_format", "json",
+            [_get_ffprobe_exe(), "-v", "quiet", "-print_format", "json",
              "-show_format", "-show_streams", video_path],
             capture_output=True, text=True, timeout=10,
         )
@@ -531,12 +655,10 @@ def _crosscheck_language(transcript_language: str, gps: Optional[dict], geo_str:
     return 0.0, details
 
 
-# ── DEBUG: remove this entire section before production ──────────────────────
-
 _DEBUG_PATH = os.path.join(os.path.dirname(__file__), "..", "content_verification_debug.json")
 
+
 def _save_debug(extracted: dict, transcript: str, video_path: str, meta: dict) -> None:
-    # DEBUG: appends extracted claims + metadata to content_verification_debug.json at project root
     record = {
         "timestamp": datetime.datetime.now().isoformat(),
         "video_path": video_path,
@@ -554,11 +676,9 @@ def _save_debug(extracted: dict, transcript: str, video_path: str, meta: dict) -
         existing.append(record)
         with open(debug_path, "w", encoding="utf-8") as f:
             json.dump(existing, f, indent=2, ensure_ascii=False)
-        print(f"[content_verification] debug saved → {debug_path}")  # DEBUG: remove before production
+        print(f"[content_verification] debug saved → {debug_path}")
     except Exception as e:
-        print(f"[content_verification] debug save failed: {e}")  # DEBUG: remove before production
-
-# ── END DEBUG ─────────────────────────────────────────────────────────────────
+        print(f"[content_verification] debug save failed: {e}")
 
 
 # ── Public entry point ────────────────────────────────────────────────────────
@@ -568,6 +688,7 @@ def analyze(frames: List[np.ndarray], video_path: str = "", meta: Optional[dict]
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
 
     if not _HAS_ANTHROPIC:
+        _dlog("analyze: early return — anthropic not installed")
         return AnalyzerResult(
             label=label, score=0.3, confidence=0.1,
             details=[
@@ -577,6 +698,7 @@ def analyze(frames: List[np.ndarray], video_path: str = "", meta: Optional[dict]
         )
 
     if not api_key:
+        _dlog("analyze: early return — ANTHROPIC_API_KEY not set")
         return AnalyzerResult(
             label=label, score=0.3, confidence=0.1,
             details=[
@@ -586,11 +708,12 @@ def analyze(frames: List[np.ndarray], video_path: str = "", meta: Optional[dict]
         )
 
     if not _HAS_DDGS:
+        _dlog("analyze: early return — ddgs/duckduckgo_search not installed")
         return AnalyzerResult(
             label=label, score=0.3, confidence=0.1,
             details=[
                 "duckduckgo_search not installed — content verification skipped.",
-                "Install with: pip install duckduckgo_search",
+                "Install with: pip install ddgs",
             ],
         )
 
@@ -610,8 +733,8 @@ def analyze(frames: List[np.ndarray], video_path: str = "", meta: Optional[dict]
                 details.append("  No speech detected, or audio extraction failed.")
         elif not _HAS_WHISPER:
             details.append(
-                "Approach 1 (audio): skipped — openai-whisper not installed. "
-                "Run: pip install openai-whisper"
+                "Approach 1 (audio): skipped — faster-whisper could not be loaded. "
+                + (f"Reason: {_WHISPER_ERROR}" if _WHISPER_ERROR else "Run: pip install faster-whisper")
             )
         else:
             details.append("Approach 1 (audio): skipped — no video path supplied.")
@@ -690,6 +813,7 @@ def analyze(frames: List[np.ndarray], video_path: str = "", meta: Optional[dict]
                 statement, search_query, category,
                 claim.get("person_name", ""),
                 claim.get("organization", ""),
+                api_key=api_key,
             )
             scores.append(score)
             details.extend(f"    {s}" for s in sub)
