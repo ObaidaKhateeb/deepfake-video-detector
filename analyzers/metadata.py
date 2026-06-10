@@ -10,16 +10,33 @@ Score: 0 = normal metadata, 1 = suspicious metadata
 import os
 import re
 import subprocess
+import sys
 import json
 from typing import Dict, Optional, Tuple
 from core.result import AnalyzerResult
+
+
+def _get_ffprobe_exe() -> str:
+    """Return the best available ffprobe path."""
+    try:
+        import imageio_ffmpeg
+        ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+        ffprobe_candidate = os.path.join(
+            os.path.dirname(ffmpeg_exe),
+            "ffprobe.exe" if sys.platform == "win32" else "ffprobe",
+        )
+        if os.path.isfile(ffprobe_candidate):
+            return ffprobe_candidate
+    except Exception:
+        pass
+    return "ffprobe"
 
 
 def _run_ffprobe(path: str) -> dict:
     """Run ffprobe if available and return parsed JSON."""
     try:
         result = subprocess.run(
-            ["ffprobe", "-v", "quiet", "-print_format", "json",
+            [_get_ffprobe_exe(), "-v", "quiet", "-print_format", "json",
              "-show_format", "-show_streams", path],
             capture_output=True, text=True, timeout=10
         )
