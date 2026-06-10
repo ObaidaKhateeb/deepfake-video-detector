@@ -92,6 +92,8 @@ def _run_analysis(video_path: str) -> dict:
     """Run all analyzers and return a serialisable results dict."""
     video = load_video(video_path)
 
+    _meta_result, _meta_dict = metadata.analyze(video_path)
+
     results = {
         "Temporal Consistency":  temporal.analyze(video.frames),
         "Face Texture":          face_texture.analyze(video.frames),
@@ -99,8 +101,8 @@ def _run_analysis(video_path: str) -> dict:
         "Noise Pattern":         noise.analyze(video.frames),
         "Brightness Flicker":    flicker.analyze(video.frames),
         "Edge Sharpness":        sharpness.analyze(video.frames),
-        "Metadata":              metadata.analyze(video_path),
-        "Content Verification":  content_verification.analyze(video.frames, video_path),
+        "Metadata":              _meta_result,
+        "Content Verification":  content_verification.analyze(video.frames, video_path, _meta_dict),
     }
 
     agg = aggregate(results)

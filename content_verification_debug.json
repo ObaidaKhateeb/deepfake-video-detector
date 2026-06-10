@@ -1,0 +1,28 @@
+[
+  {
+    "timestamp": "2026-06-10T20:04:03.648252",
+    "video_path": "C:/Users/okhatib/Downloads/real.mp4",
+    "transcript_preview": "",
+    "claims": [
+      {
+        "statement": "The man depicted appears to be Barack Obama, former U.S. President",
+        "search_query": "Barack Obama president",
+        "category": "person"
+      },
+      {
+        "statement": "The video appears to be filmed in a White House setting with U.S. and presidential flags",
+        "search_query": "White House presidential address flags setting",
+        "category": "institution"
+      }
+    ],
+    "context": {
+      "claimed_dates": [],
+      "claimed_locations": [
+        "White House"
+      ],
+      "claimed_source": "presidential video address",
+      "transcript_language": "English"
+    },
+    "metadata": {}
+  }
+]

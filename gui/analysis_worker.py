@@ -82,12 +82,12 @@ class AnalysisWorker(QThread):
 
             # Step 7 — metadata
             step(7, "Metadata")
-            results["Metadata"] = metadata.analyze(self.video_path)
+            results["Metadata"], meta_dict = metadata.analyze(self.video_path)
 
-            # Step 8 — content verification (audio transcript + dense frames + web search)
+            # Step 8 — content verification (audio transcript + frames + web search + metadata cross-checks)
             step(8, "Content Verification")
             results["Content Verification"] = content_verification.analyze(
-                video.frames, self.video_path
+                video.frames, self.video_path, meta_dict
             )
 
             # Step 9 — aggregate
