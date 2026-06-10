@@ -6,9 +6,10 @@ Two parallel approaches to extracting factual claims from a video:
   Approach 2 — Visual: frames sampled at ~1 fps so on-screen text and
                         lower-thirds are not missed
 
-Both are fed together into Claude Vision, which extracts verifiable claims
-(person names + titles + organizations, company details, spoken assertions).
-Those claims are then checked against live web search results.
+Both are fed into Claude Vision, which extracts any verifiable claim found
+in either source — people, events, statistics, dates, locations, quotes, etc.
+Each claim is paired with a targeted search query and verified against live
+web search results.
 
 Score: 0 = all claims verified or no verifiable claims found
        1 = claims present and actively contradicted by web sources
@@ -48,38 +49,21 @@ _MAX_VISUAL_FRAMES = 15
 _CLAIMS_SCHEMA = {
     "type": "object",
     "properties": {
-        "people": {
+        "claims": {
             "type": "array",
             "items": {
                 "type": "object",
                 "properties": {
-                    "name":         {"type": "string"},
-                    "title":        {"type": "string"},
-                    "organization": {"type": "string"},
+                    "statement":    {"type": "string"},
+                    "search_query": {"type": "string"},
+                    "category":     {"type": "string"},
                 },
-                "required": ["name", "title", "organization"],
+                "required": ["statement", "search_query", "category"],
                 "additionalProperties": False,
             },
-        },
-        "organizations": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "name":            {"type": "string"},
-                    "claimed_country": {"type": "string"},
-                    "claimed_type":    {"type": "string"},
-                },
-                "required": ["name", "claimed_country", "claimed_type"],
-                "additionalProperties": False,
-            },
-        },
-        "other_claims": {
-            "type": "array",
-            "items": {"type": "string"},
         },
     },
-    "required": ["people", "organizations", "other_claims"],
+    "required": ["claims"],
     "additionalProperties": False,
 }
 
@@ -151,7 +135,7 @@ def _extract_claims(frames: List[np.ndarray], transcript: str, api_key: str) -> 
             },
         })
 
-    lines = ["Analyze this video content for verifiable factual claims.\n"]
+    lines = ["Analyze this video content and extract every verifiable factual claim.\n"]
 
     if transcript:
         lines.append(
@@ -167,14 +151,22 @@ def _extract_claims(frames: List[np.ndarray], transcript: str, api_key: str) -> 
         )
 
     lines.append(
-        "Extract every verifiable factual claim found in EITHER the transcript OR the frames:\n"
-        "1. Named people with their claimed title/role and organization\n"
-        "   (e.g. a lower-third reading 'John Smith – CEO, Acme Corp', or someone\n"
-        "   saying 'I am the CEO of Acme Corp' in the audio)\n"
-        "2. Named organizations or companies with any stated country or type\n"
-        "3. Any other factual statements that could be checked against real-world sources\n\n"
+        "Extract every verifiable factual claim found in EITHER the transcript OR the frames.\n"
+        "A claim can be anything checkable against real-world sources, for example:\n"
+        "  - A person's name, title, or role (e.g. 'John Smith is the CEO of Acme Corp')\n"
+        "  - A statistic or number (e.g. 'unemployment is at 3.5%')\n"
+        "  - An event or date (e.g. 'the earthquake struck on March 4th')\n"
+        "  - A location or geography (e.g. 'the factory is in Detroit')\n"
+        "  - An organizational or institutional fact (e.g. 'WHO declared a pandemic')\n"
+        "  - A quote attributed to someone\n"
+        "  - Any other assertable fact that could be confirmed or refuted\n\n"
+        "For each claim provide:\n"
+        "  - statement:    the exact factual assertion as it appears in the content\n"
+        "  - search_query: a concise web search query that would verify or refute it\n"
+        "  - category:     a short label describing the claim type "
+        "(e.g. 'person', 'statistic', 'event', 'location', 'quote', 'organization', etc.)\n\n"
         "Return ONLY the JSON object matching the schema. "
-        "If nothing verifiable is present, return empty arrays for all fields."
+        "If nothing verifiable is present, return an empty claims array."
     )
 
     content.append({"type": "text", "text": "\n".join(lines)})
@@ -194,7 +186,7 @@ def _extract_claims(frames: List[np.ndarray], transcript: str, api_key: str) -> 
         try:
             return json.loads(cleaned)
         except json.JSONDecodeError:
-            return {"people": [], "organizations": [], "other_claims": []}
+            return {"claims": []}
 
 
 # ── Web verification ──────────────────────────────────────────────────────────
@@ -208,69 +200,56 @@ def _web_snippets(query: str, max_results: int = 5) -> List[str]:
         return []
 
 
-def _verify_person(name: str, title: str, org: str) -> Tuple[float, List[str]]:
-    details: List[str] = []
-    if not name:
-        return 0.3, ["No person name to verify."]
+_STOP_WORDS = {
+    "the", "this", "that", "with", "from", "have", "been", "were", "they",
+    "their", "about", "into", "which", "when", "said", "also", "some", "more",
+}
 
-    snippets = _web_snippets(f'"{name}" "{org}" {title}')
+
+def _verify_claim(statement: str, search_query: str, category: str) -> Tuple[float, List[str]]:
+    """
+    Generic claim verifier: searches the web using search_query and scores how
+    well the snippets support the statement using keyword overlap.
+    """
+    details: List[str] = []
+    if not statement:
+        return 0.3, ["Empty claim — skipped."]
+
+    snippets = _web_snippets(search_query)
     if not snippets:
-        details.append(f"No web evidence for: {name} as {title} at {org}")
-        return 0.4, details
+        details.append(f"[{category}] No web results for: {search_query}")
+        return 0.5, details
 
     combined = " ".join(snippets).lower()
-    name_words = [w for w in name.lower().split() if len(w) > 2]
-    name_found = any(w in combined for w in name_words)
-    org_found = bool(org) and org.lower() in combined
+    key_words = [
+        w for w in re.findall(r"\b[a-z]{3,}\b", statement.lower())
+        if w not in _STOP_WORDS
+    ]
 
-    if name_found and org_found:
-        details.append(f"VERIFIED: {name} associated with {org} in web sources.")
+    if not key_words:
+        details.append(f"[{category}] Results found but no specific keywords to match.")
+        return 0.2, details
+
+    matched = sum(1 for w in key_words if w in combined)
+    ratio = matched / len(key_words)
+
+    if ratio >= 0.6:
+        details.append(
+            f"[{category}] VERIFIED: {matched}/{len(key_words)} key terms found in web sources."
+        )
         return 0.0, details
-
-    if name_found and org:
-        leader_snippets = _web_snippets(f'"{org}" CEO president founder leader')
-        leader_text = " ".join(leader_snippets).lower()
-        if leader_text and not any(w in leader_text for w in name_words):
-            details.append(f"MISMATCH: {name} not found in leadership of {org}.")
-            details.append(f"Web sources for '{org}' do not list {name}.")
-            return 0.8, details
-        details.append(f"PARTIAL: {name} found online but link to {org} is unclear.")
+    elif ratio >= 0.3:
+        details.append(
+            f"[{category}] PARTIAL: {matched}/{len(key_words)} key terms found — "
+            "claim may be inaccurate or context differs."
+        )
         return 0.4, details
-
-    details.append(f"NOT FOUND: No web evidence for {name} as {title} at {org}.")
-    return 0.5, details
-
-
-def _verify_organization(name: str, claimed_country: str) -> Tuple[float, List[str]]:
-    details: List[str] = []
-    if not name:
-        return 0.3, ["No organization name to verify."]
-
-    snippets = _web_snippets(f'"{name}" company organization')
-    if not snippets:
-        details.append(f"No web evidence found for organization: {name}")
-        return 0.6, details
-
-    combined = " ".join(snippets).lower()
-    if name.lower() not in combined:
-        details.append(f"SUSPICIOUS: Organization '{name}' not found in web searches.")
-        return 0.7, details
-
-    details.append(f"Organization '{name}' found in web sources.")
-
-    if claimed_country:
-        country_lower = claimed_country.lower()
-        aliases = {country_lower,
-                   "american" if "usa" in country_lower else "",
-                   "u.s." if "usa" in country_lower else ""}
-        aliases.discard("")
-        if any(a in combined for a in aliases):
-            details.append(f"Country claim ({claimed_country}) confirmed in web sources.")
-            return 0.0, details
-        details.append(f"WARNING: Could not confirm '{name}' is from {claimed_country}.")
-        return 0.4, details
-
-    return 0.1, details
+    else:
+        details.append(
+            f"[{category}] SUSPICIOUS: only {matched}/{len(key_words)} key terms found — "
+            "little web support for this claim."
+        )
+        return 0.65, details
 
 
 # ── Public entry point ────────────────────────────────────────────────────────
@@ -353,13 +332,11 @@ def analyze(frames: List[np.ndarray], video_path: str = "") -> AnalyzerResult:
             f"Sending {' + '.join(sources)} to Claude AI for claim extraction..."
         )
 
-        claims = _extract_claims(sampled, transcript, api_key)
+        extracted = _extract_claims(sampled, transcript, api_key)
 
-        people       = claims.get("people", [])
-        organizations = claims.get("organizations", [])
-        other_claims  = claims.get("other_claims", [])
+        claim_list = extracted.get("claims", [])
 
-        if not people and not organizations and not other_claims:
+        if not claim_list:
             return AnalyzerResult(
                 label=label, score=0.2, confidence=0.5,
                 details=details + [
@@ -367,42 +344,27 @@ def analyze(frames: List[np.ndarray], video_path: str = "") -> AnalyzerResult:
                 ],
             )
 
-        details.append(
-            f"Extracted: {len(people)} person claim(s), "
-            f"{len(organizations)} organization(s), "
-            f"{len(other_claims)} other claim(s)."
-        )
+        details.append(f"Extracted {len(claim_list)} verifiable claim(s).")
 
         # ── Web verification ──────────────────────────────────────────────────
         details.append("Verifying claims against web sources...")
         scores: List[float] = []
 
-        for person in people:
-            name  = person.get("name", "")
-            title = person.get("title", "")
-            org   = person.get("organization", "")
-            if name:
-                details.append(f"\n[Person] {name} — {title or 'unknown role'} at {org or 'unknown org'}")
-                score, sub = _verify_person(name, title, org)
-                scores.append(score)
-                details.extend(f"  {s}" for s in sub)
-
-        for org_claim in organizations:
-            org_name = org_claim.get("name", "")
-            country  = org_claim.get("claimed_country", "")
-            if org_name:
-                details.append(f"\n[Organization] {org_name} (claimed: {country or 'country unspecified'})")
-                score, sub = _verify_organization(org_name, country)
-                scores.append(score)
-                details.extend(f"  {s}" for s in sub)
-
-        if other_claims:
-            details.append(f"\n[Other claims] {'; '.join(other_claims[:3])}")
+        for claim in claim_list:
+            statement    = claim.get("statement", "")
+            search_query = claim.get("search_query", statement)
+            category     = claim.get("category", "claim")
+            if not statement:
+                continue
+            details.append(f"\n  \"{statement}\"")
+            score, sub = _verify_claim(statement, search_query, category)
+            scores.append(score)
+            details.extend(f"    {s}" for s in sub)
 
         if not scores:
             return AnalyzerResult(
                 label=label, score=0.3, confidence=0.3,
-                details=details + ["Claims extracted but no verifiable entities identified."],
+                details=details + ["Claims extracted but none could be verified."],
             )
 
         avg_score   = float(np.mean(scores))
