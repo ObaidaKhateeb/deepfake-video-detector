@@ -669,8 +669,8 @@ def analyze(frames: List[np.ndarray], video_path: str = "", meta: Optional[dict]
 
         if not claim_list and not ctx.get("claimed_dates") and not ctx.get("claimed_locations"):
             return AnalyzerResult(
-                label=label, score=0.2, confidence=0.5,
-                details=details + ["No verifiable factual claims found in either audio or visual content."],
+                label=label, score=0.2, confidence=0.1,
+                details=details + ["No verifiable factual claims found — content verification has minimal weight in final score."],
             )
 
         details.append(f"Extracted {len(claim_list)} verifiable claim(s).")
@@ -716,14 +716,14 @@ def analyze(frames: List[np.ndarray], video_path: str = "", meta: Optional[dict]
 
         if not scores:
             return AnalyzerResult(
-                label=label, score=0.3, confidence=0.3,
+                label=label, score=0.3, confidence=0.1,
                 details=details + ["Claims extracted but none could be scored."],
             )
 
         avg_score   = float(np.mean(scores))
         max_score   = float(max(scores))
         final_score = max(0.0, min(1.0, 0.6 * avg_score + 0.4 * max_score))
-        confidence  = min(1.0, len(scores) * 0.25 + 0.25)
+        confidence  = min(1.0, len(scores) * 0.20)
 
         details.append(
             f"\nSummary: {len(scores)} check(s) — "

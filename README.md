@@ -89,16 +89,28 @@ if API keys are missing those features are skipped and the remaining analyzers s
 
 ## Analyzers & Weights
 
-| Analyzer              | Weight | What it measures |
-|-----------------------|--------|-----------------|
-| Temporal Consistency  | 25%    | Frame-to-frame flickering / instability |
-| Face Texture          | 20%    | Skin smoothness (GANs over-smooth faces) |
-| Compression Artifacts | 15%    | DCT blocking from double-compression |
-| Noise Pattern         | 15%    | Sensor noise consistency across regions |
-| Brightness Flicker    | 5%     | Unnatural luminance jumps |
-| Edge Sharpness        | 5%     | Face vs background sharpness mismatch |
-| Metadata              | 5%     | Missing/suspicious file metadata |
-| Content Verification  | 10%    | AI vision + web search claim verification *(requires API key)* |
+The final score is split equally between two independent groups:
+
+**Processing group — 50% of final score**
+
+| Analyzer              | Weight within group | What it measures |
+|-----------------------|---------------------|-----------------|
+| Temporal Consistency  | 25%                 | Frame-to-frame flickering / instability |
+| Face Texture          | 20%                 | Skin smoothness (GANs over-smooth faces) |
+| Compression Artifacts | 15%                 | DCT blocking from double-compression |
+| Noise Pattern         | 15%                 | Sensor noise consistency across regions |
+| Brightness Flicker    | 5%                  | Unnatural luminance jumps |
+| Edge Sharpness        | 5%                  | Face vs background sharpness mismatch |
+| Metadata              | 5%                  | Missing/suspicious file metadata |
+
+**Content Verification — 50% of final score**
+
+| Analyzer             | What it measures |
+|----------------------|-----------------|
+| Content Verification | AI claim extraction + web verification + metadata cross-checks *(requires Anthropic API key)* |
+
+Each group's contribution is scaled by its effective confidence — if Content Verification
+is unavailable (no API key), its weight transfers back to the processing group automatically.
 
 ---
 
