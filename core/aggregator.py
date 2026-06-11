@@ -2,8 +2,7 @@
 core/aggregator.py
 Two-group aggregation:
 
-  Group 1 — Processing (50%): seven heuristic signal analyzers whose weights
-             reflect their relative importance within the group.
+  Group 1 — Processing (50%): AI visual model + metadata.
   Group 2 — Content Verification (50%): AI-powered claim extraction and
              metadata cross-check.
 
@@ -15,16 +14,9 @@ cedes weight back to the processing group.
 from core.result import AnalyzerResult, AggregatedResult
 from typing import Dict, Tuple
 
-# Relative weights within the processing group (do not need to sum to 1 —
-# they are normalised internally).
 PROCESSING_WEIGHTS: Dict[str, float] = {
-    "Temporal Consistency":  0.25,
-    "Face Texture":          0.20,
-    "Compression Artifacts": 0.15,
-    "Noise Pattern":         0.15,
-    "Brightness Flicker":    0.05,
-    "Edge Sharpness":        0.05,
-    "Metadata":              0.05,
+    "Visual Analysis": 0.95,
+    "Metadata":        0.05,
 }
 
 _PROCESSING_SHARE   = 0.50
