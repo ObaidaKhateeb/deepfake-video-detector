@@ -78,6 +78,27 @@ _MAX_VISUAL_FRAMES = 15
 _MIN_FRAME_GAP_SEC = 3.0
 _VISUAL_DIFF_THRESHOLD = 10.0
 
+_CONTRADICTIONS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "contradictions": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "description": {"type": "string"},
+                    "type":        {"type": "string"},
+                    "confidence":  {"type": "string"},
+                },
+                "required": ["description", "type", "confidence"],
+                "additionalProperties": False,
+            },
+        }
+    },
+    "required": ["contradictions"],
+    "additionalProperties": False,
+}
+
 _CLAIMS_SCHEMA = {
     "type": "object",
     "properties": {
@@ -655,6 +676,98 @@ def _crosscheck_language(transcript_language: str, gps: Optional[dict], geo_str:
     return 0.0, details
 
 
+def _check_internal_contradictions(
+    frames: List[np.ndarray], transcript: str, api_key: str
+) -> Tuple[float, List[str]]:
+    """
+    Ask Claude to find contradictions WITHIN the video between what is said,
+    what is shown visually, and any on-screen text.
+    Returns (score, details): score 0.0 = no contradictions, up to 1.0.
+    """
+    details: List[str] = []
+    if not api_key or not frames:
+        return 0.0, details
+
+    client = anthropic.Anthropic(api_key=api_key)
+    content = []
+    for frame in frames:
+        content.append({
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": "image/jpeg",
+                "data": _frame_to_base64(frame),
+            },
+        })
+
+    prompt_lines = [
+        "Your task is to find INTERNAL contradictions within this video — "
+        "conflicts between what is said, what is visually present, and any on-screen text.\n"
+    ]
+    if transcript:
+        prompt_lines.append(
+            f'AUDIO TRANSCRIPT:\n"""\n{transcript}\n"""\n'
+        )
+    prompt_lines.append(
+        f"VIDEO FRAMES: {len(frames)} sampled frame(s) shown above.\n\n"
+        "Look specifically for:\n"
+        "  1. Person claims a role/title/affiliation but visible logos, name badges, "
+        "or background signage contradict it\n"
+        "     (e.g. claims to be NVIDIA CEO but Apple logo is clearly visible behind them)\n"
+        "  2. Person claims a location but visible landmarks, flags, street signs, or "
+        "architecture contradict it\n"
+        "     (e.g. says 'I am in Rome' but Eiffel Tower is visible in the background)\n"
+        "  3. Person claims a date/time but visible clocks, calendars, newspapers, or "
+        "seasonal cues contradict it\n"
+        "  4. On-screen text chyron or name plate contradicts what the person says about themselves\n"
+        "  5. Logos or symbols of competing/incompatible organizations appear together "
+        "in a way that makes no sense\n\n"
+        "For each contradiction found:\n"
+        "  - description: clear explanation of what contradicts what\n"
+        "  - type: one of 'person_role', 'location', 'date_time', 'text_spoken', 'visual_visual'\n"
+        "  - confidence: 'strong' if clearly visible and unambiguous, 'weak' if uncertain\n\n"
+        "IMPORTANT: Only report genuine contradictions backed by what you can actually see or hear. "
+        "Do not speculate. Return an empty array if none found.\n\n"
+        "Return ONLY the JSON object matching the schema."
+    )
+    content.append({"type": "text", "text": "\n".join(prompt_lines)})
+
+    try:
+        response = client.messages.create(
+            model="claude-opus-4-8",
+            max_tokens=1024,
+            output_config={"format": {"type": "json_schema", "schema": _CONTRADICTIONS_SCHEMA}},
+            messages=[{"role": "user", "content": content}],
+        )
+        text = next((b.text for b in response.content if b.type == "text"), "{}")
+        try:
+            result = json.loads(text)
+        except json.JSONDecodeError:
+            cleaned = re.sub(r"```(?:json)?", "", text).strip().rstrip("`")
+            result = json.loads(cleaned) if cleaned else {"contradictions": []}
+    except Exception as exc:
+        _dlog(f"_check_internal_contradictions failed: {exc}")
+        details.append(f"[internal] Contradiction check failed: {exc}")
+        return 0.0, details
+
+    contradictions = result.get("contradictions", [])
+    if not contradictions:
+        details.append("[internal] No internal contradictions detected.")
+        return 0.0, details
+
+    score = 0.0
+    for c in contradictions:
+        conf = c.get("confidence", "weak")
+        ctype = c.get("type", "")
+        desc = c.get("description", "")
+        increment = 0.40 if conf == "strong" else 0.15
+        score = min(1.0, score + increment)
+        tag = "STRONG CONTRADICTION" if conf == "strong" else "Possible contradiction"
+        details.append(f"[internal] {tag} ({ctype}): {desc}")
+
+    return score, details
+
+
 _DEBUG_PATH = os.path.join(os.path.dirname(__file__), "..", "content_verification_debug.json")
 
 
@@ -800,17 +913,14 @@ def analyze(frames: List[np.ndarray], video_path: str = "", meta: Optional[dict]
         claim_list = extracted.get("claims", [])
         ctx        = extracted.get("context", {})
 
-        if not claim_list and not ctx.get("claimed_dates") and not ctx.get("claimed_locations"):
-            return AnalyzerResult(
-                label=label, score=0.2, confidence=0.1,
-                details=details + ["No verifiable factual claims found — content verification has minimal weight in final score."],
-            )
+        if claim_list:
+            details.append(f"Extracted {len(claim_list)} verifiable claim(s).")
+        else:
+            details.append("No verifiable factual claims found — running contradiction and metadata checks only.")
 
-        details.append(f"Extracted {len(claim_list)} verifiable claim(s).")
-
-        # ── Web verification ──────────────────────────────────────────────────
+        # ── Web verification (50% weight) ─────────────────────────────────────
         details.append("\nVerifying claims against web sources...")
-        scores: List[float] = []
+        web_scores: List[float] = []
 
         for claim in claim_list:
             statement    = claim.get("statement", "")
@@ -825,16 +935,20 @@ def analyze(frames: List[np.ndarray], video_path: str = "", meta: Optional[dict]
                 claim.get("organization", ""),
                 api_key=api_key,
             )
-            scores.append(score)
+            web_scores.append(score)
             details.extend(f"    {s}" for s in sub)
 
-        # ── Metadata cross-checks ─────────────────────────────────────────────
+        # ── Internal contradictions (25% weight) ──────────────────────────────
+        details.append("\nChecking internal contradictions (visual vs. spoken)...")
+        int_score, int_details = _check_internal_contradictions(sampled, transcript, api_key)
+        details.extend(f"  {line}" for line in int_details)
+
+        # ── Metadata cross-checks (25% weight) ───────────────────────────────
+        meta_scores: List[float] = []
         if meta:
             details.append("\nCross-checking content against file metadata...")
-
             geo_str = ""
             gps = meta.get("gps")
-
             for fn, args in [
                 (_crosscheck_date,             (ctx.get("claimed_dates", []),    meta.get("creation_time", ""))),
                 (_crosscheck_location,         (ctx.get("claimed_locations", []), gps)),
@@ -845,24 +959,44 @@ def analyze(frames: List[np.ndarray], video_path: str = "", meta: Optional[dict]
                 s, sub = fn(*args)
                 if sub:
                     if s > 0.0:
-                        scores.append(s)
+                        meta_scores.append(s)
                     details.extend(f"  {line}" for line in sub)
 
-        if not scores:
+        # ── Weighted final score ──────────────────────────────────────────────
+        def _bucket_agg(sc):
+            if not sc:
+                return None
+            avg = float(np.mean(sc))
+            mx  = float(max(sc))
+            return max(0.0, min(1.0, 0.6 * avg + 0.4 * mx))
+
+        web_final  = _bucket_agg(web_scores)
+        meta_final = _bucket_agg(meta_scores)
+
+        parts = []
+        if web_final is not None:
+            parts.append((0.50, web_final))
+        if sampled:  # internal check ran — always contribute
+            parts.append((0.25, int_score))
+        if meta_final is not None:
+            parts.append((0.25, meta_final))
+
+        if not parts:
             return AnalyzerResult(
                 label=label, score=0.3, confidence=0.1,
-                details=details + ["Claims extracted but none could be scored."],
+                details=details + ["No checks could be scored."],
             )
 
-        avg_score   = float(np.mean(scores))
-        max_score   = float(max(scores))
-        final_score = max(0.0, min(1.0, 0.6 * avg_score + 0.4 * max_score))
-        confidence  = min(1.0, len(scores) * 0.20)
+        total_weight = sum(w for w, _ in parts)
+        final_score  = max(0.0, min(1.0, sum(w * s for w, s in parts) / total_weight))
+        confidence   = min(1.0, (len(web_scores) + len(meta_scores) + (1 if sampled else 0)) * 0.15 + 0.1)
 
         details.append(
-            f"\nSummary: {len(scores)} check(s) — "
-            f"avg suspicion {avg_score:.2f}, max {max_score:.2f}."
+            f"\nSummary: {len(web_scores)} web claim(s) checked, "
+            f"internal contradictions={'yes' if int_score > 0 else 'none'}, "
+            f"{len(meta_scores)} metadata check(s)."
         )
+        details.append("Score weights: web 50% | internal contradictions 25% | metadata 25%.")
         details.append("Score key: 0 = verified real, 1 = claims actively contradicted.")
 
         return AnalyzerResult(
