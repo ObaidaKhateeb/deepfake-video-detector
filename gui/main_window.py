@@ -244,6 +244,8 @@ class MainWindow(QMainWindow):
         self._detail_text = QLabel("No details yet.")
         self._detail_text.setWordWrap(True)
         self._detail_text.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        self._detail_text.setTextInteractionFlags(
+            Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard)
         self._detail_text.setStyleSheet(f"""
             color: {TEXT_MUTED};
             font-family: monospace;

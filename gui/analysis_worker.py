@@ -10,24 +10,14 @@ from core.video_loader import load_video
 from core.aggregator import aggregate
 from core.result import AggregatedResult, AnalyzerResult
 
-import analyzers.temporal_consistency  as temporal
-import analyzers.face_texture          as face_texture
-import analyzers.compression_artifacts as compression
-import analyzers.noise_pattern         as noise
-import analyzers.brightness_flicker    as flicker
-import analyzers.edge_sharpness        as sharpness
-import analyzers.metadata              as metadata
-import analyzers.content_verification  as content_verification
+import analyzers.visual_analysis      as visual_analysis
+import analyzers.metadata             as metadata
+import analyzers.content_verification as content_verification
 
 
 ANALYZER_STEPS = [
     "Loading video",
-    "Temporal Consistency",
-    "Face Texture",
-    "Compression Artifacts",
-    "Noise Pattern",
-    "Brightness Flicker",
-    "Edge Sharpness",
+    "Visual Analysis",
     "Metadata",
     "Content Verification",
     "Aggregating results",
@@ -56,42 +46,22 @@ class AnalysisWorker(QThread):
 
             results = {}
 
-            # Step 1 — temporal
-            step(1, "Temporal Consistency")
-            results["Temporal Consistency"] = temporal.analyze(video.frames)
+            # Step 1 — AI visual analysis (EfficientNet-B4 ONNX)
+            step(1, "Visual Analysis")
+            results["Visual Analysis"] = visual_analysis.analyze(video.frames)
 
-            # Step 2 — face texture
-            step(2, "Face Texture")
-            results["Face Texture"] = face_texture.analyze(video.frames)
-
-            # Step 3 — compression
-            step(3, "Compression Artifacts")
-            results["Compression Artifacts"] = compression.analyze(video.frames)
-
-            # Step 4 — noise
-            step(4, "Noise Pattern")
-            results["Noise Pattern"] = noise.analyze(video.frames)
-
-            # Step 5 — flicker
-            step(5, "Brightness Flicker")
-            results["Brightness Flicker"] = flicker.analyze(video.frames)
-
-            # Step 6 — sharpness
-            step(6, "Edge Sharpness")
-            results["Edge Sharpness"] = sharpness.analyze(video.frames)
-
-            # Step 7 — metadata
-            step(7, "Metadata")
+            # Step 2 — metadata
+            step(2, "Metadata")
             results["Metadata"], meta_dict = metadata.analyze(self.video_path)
 
-            # Step 8 — content verification (audio transcript + frames + web search + metadata cross-checks)
-            step(8, "Content Verification")
+            # Step 3 — content verification
+            step(3, "Content Verification")
             results["Content Verification"] = content_verification.analyze(
                 video.frames, self.video_path, meta_dict
             )
 
-            # Step 9 — aggregate
-            step(9, "Aggregating results")
+            # Step 4 — aggregate
+            step(4, "Aggregating results")
             result = aggregate(results)
 
             self.progress.emit(100, "Done")
