@@ -24,14 +24,9 @@ from flask_cors import CORS
 from core.video_loader import load_video
 from core.aggregator import aggregate
 
-import analyzers.temporal_consistency  as temporal
-import analyzers.face_texture          as face_texture
-import analyzers.compression_artifacts as compression
-import analyzers.noise_pattern         as noise
-import analyzers.brightness_flicker    as flicker
-import analyzers.edge_sharpness        as sharpness
-import analyzers.metadata              as metadata
-import analyzers.content_verification  as content_verification
+import analyzers.visual_analysis      as visual_analysis
+import analyzers.metadata             as metadata
+import analyzers.content_verification as content_verification
 
 app = Flask(__name__)
 CORS(app, origins=["*"])
@@ -95,14 +90,9 @@ def _run_analysis(video_path: str) -> dict:
     _meta_result, _meta_dict = metadata.analyze(video_path)
 
     results = {
-        "Temporal Consistency":  temporal.analyze(video.frames),
-        "Face Texture":          face_texture.analyze(video.frames),
-        "Compression Artifacts": compression.analyze(video.frames),
-        "Noise Pattern":         noise.analyze(video.frames),
-        "Brightness Flicker":    flicker.analyze(video.frames),
-        "Edge Sharpness":        sharpness.analyze(video.frames),
-        "Metadata":              _meta_result,
-        "Content Verification":  content_verification.analyze(video.frames, video_path, _meta_dict),
+        "Visual Analysis":      visual_analysis.analyze(video.frames),
+        "Metadata":             _meta_result,
+        "Content Verification": content_verification.analyze(video.frames, video_path, _meta_dict),
     }
 
     agg = aggregate(results)

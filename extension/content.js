@@ -6,8 +6,6 @@
  * analysis.  Results are rendered in an overlay panel on the page.
  */
 
-const SERVER = "http://127.0.0.1:7177";
-
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function escHtml(str) {
@@ -181,29 +179,26 @@ async function handleAnalyze(video, wrapper, btn) {
   });
 
   try {
-    const resp = await fetch(`${SERVER}/analyze`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url }),
+    const response = await new Promise((resolve, reject) => {
+      chrome.runtime.sendMessage({ type: "analyze", url }, (reply) => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+        } else {
+          resolve(reply);
+        }
+      });
     });
 
     if (aborted) return;
 
-    const data = await resp.json();
-
-    if (!resp.ok || data.error) {
-      showError(wrapper, data.error ?? `Server error ${resp.status}`);
+    if (response.error) {
+      showError(wrapper, response.error);
     } else {
-      showResults(wrapper, data);
+      showResults(wrapper, response.data);
     }
   } catch (err) {
     if (aborted) return;
-    const msg =
-      err.name === "TypeError"
-        ? "Cannot reach the local server at 127.0.0.1:7177.\n" +
-          "Make sure server.py is running: python server.py"
-        : `Network error: ${err.message}`;
-    showError(wrapper, msg);
+    showError(wrapper, `Extension error: ${err.message}`);
   } finally {
     btn.disabled = false;
     btn.innerHTML = "🔍 Re-analyse";

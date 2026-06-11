@@ -10,3 +10,4 @@ debug_output.txt
 
 # Env / secrets
 .env
+api.json
