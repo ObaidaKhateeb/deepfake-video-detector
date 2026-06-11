@@ -1,149 +1,148 @@
 """
 analyzers/metadata.py
 Analyzes video file metadata for suspicious patterns.
-Missing metadata, unusual encoding parameters, or
-atypical file characteristics can indicate synthetic origin.
-
-Score: 0 = normal metadata, 1 = suspicious metadata
+Uses ffmpeg (bundled via imageio-ffmpeg) — no separate ffprobe needed.
 """
 
 import os
 import re
 import subprocess
 import sys
-import json
 from typing import Dict, Optional, Tuple
 from core.result import AnalyzerResult
 
 
-def _get_ffprobe_exe() -> str:
-    """Return the best available ffprobe path."""
+def _get_ffmpeg_exe() -> str:
     try:
         import imageio_ffmpeg
-        ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
-        ffprobe_candidate = os.path.join(
-            os.path.dirname(ffmpeg_exe),
-            "ffprobe.exe" if sys.platform == "win32" else "ffprobe",
-        )
-        if os.path.isfile(ffprobe_candidate):
-            return ffprobe_candidate
+        return imageio_ffmpeg.get_ffmpeg_exe()
     except Exception:
-        pass
-    return "ffprobe"
+        return "ffmpeg"
 
 
-def _run_ffprobe(path: str) -> dict:
-    """Run ffprobe if available and return parsed JSON."""
+def _run_ffmpeg_info(path: str) -> str:
+    """Run ffmpeg -i and return stderr output (where ffmpeg prints stream info)."""
     try:
         result = subprocess.run(
-            [_get_ffprobe_exe(), "-v", "quiet", "-print_format", "json",
-             "-show_format", "-show_streams", path],
+            [_get_ffmpeg_exe(), "-i", path],
             capture_output=True, text=True, timeout=10
         )
-        if result.returncode == 0:
-            return json.loads(result.stdout)
-    except (FileNotFoundError, subprocess.TimeoutExpired, json.JSONDecodeError):
-        pass
-    return {}
+        return result.stderr
+    except Exception:
+        return ""
 
 
-def _parse_metadata(raw: dict) -> Dict:
-    """Extract fields needed for content cross-checking from raw ffprobe output."""
-    fmt = raw.get("format", {})
-    tags = {k.lower(): v for k, v in fmt.get("tags", {}).items()}
-    streams = raw.get("streams", [])
-    audio_streams = [s for s in streams if s.get("codec_type") == "audio"]
-
-    location_raw = (
-        tags.get("com.apple.quicktime.location.iso6709", "") or
-        tags.get("location", "") or
-        tags.get("location-eng", "")
-    )
-    gps: Optional[Dict] = None
-    if location_raw:
-        m = re.match(r'([+-]\d+\.?\d*)([+-]\d+\.?\d*)', location_raw)
-        if m:
-            gps = {"lat": float(m.group(1)), "lon": float(m.group(2))}
-
-    audio_lang = audio_streams[0].get("tags", {}).get("language", "") if audio_streams else ""
-
-    return {
-        "creation_time": tags.get("creation_time", ""),
-        "gps":           gps,
-        "make":          tags.get("com.apple.quicktime.make", "") or tags.get("make", ""),
-        "model":         tags.get("com.apple.quicktime.model", "") or tags.get("model", ""),
-        "encoder":       tags.get("encoder", "") or tags.get("com.apple.quicktime.software", ""),
-        "audio_language": audio_lang,
+def _parse_ffmpeg_output(output: str) -> dict:
+    """Parse ffmpeg -i stderr output into a structured dict."""
+    data = {
+        "encoder": "",
+        "creation_time": "",
+        "video_codec": "",
+        "audio_streams": 0,
+        "gps": None,
+        "make": "",
+        "model": "",
+        "audio_language": "",
     }
+
+    for line in output.splitlines():
+        line = line.strip()
+
+        m = re.search(r'encoder\s*:\s*(.+)', line, re.IGNORECASE)
+        if m:
+            data["encoder"] = m.group(1).strip()
+
+        m = re.search(r'creation_time\s*:\s*(.+)', line, re.IGNORECASE)
+        if m:
+            data["creation_time"] = m.group(1).strip()
+
+        m = re.search(r'com\.apple\.quicktime\.make\s*:\s*(.+)', line, re.IGNORECASE)
+        if m:
+            data["make"] = m.group(1).strip()
+
+        m = re.search(r'com\.apple\.quicktime\.model\s*:\s*(.+)', line, re.IGNORECASE)
+        if m:
+            data["model"] = m.group(1).strip()
+
+        m = re.search(r'location\s*:\s*([+-]\d+\.?\d*[+-]\d+\.?\d*)', line, re.IGNORECASE)
+        if m:
+            coords = re.match(r'([+-]\d+\.?\d*)([+-]\d+\.?\d*)', m.group(1))
+            if coords:
+                data["gps"] = {"lat": float(coords.group(1)), "lon": float(coords.group(2))}
+
+        if re.search(r'Stream.*Video:\s*(\w+)', line):
+            m = re.search(r'Stream.*Video:\s*(\w+)', line)
+            if m:
+                data["video_codec"] = m.group(1).lower()
+
+        if re.search(r'Stream.*Audio:', line):
+            data["audio_streams"] += 1
+            m = re.search(r'\((\w{3})\).*Audio:', line)
+            if m and not data["audio_language"]:
+                data["audio_language"] = m.group(1)
+
+    return data
 
 
 def analyze(path: str) -> Tuple[AnalyzerResult, Dict]:
     label = "Metadata"
-    score = 0.0
     details = []
     suspicious_flags = 0
 
-    # Basic file checks
     file_size = os.path.getsize(path)
     ext = os.path.splitext(path)[1].lower()
     details.append(f"File: {os.path.basename(path)}")
     details.append(f"Size: {file_size / (1024*1024):.2f} MB")
     details.append(f"Extension: {ext}")
 
-    # Unusually small file for a video = possibly synthetic/compressed
-    if file_size < 500_000:   # < 500 KB
+    if file_size < 500_000:
         details.append("⚠ Very small file size — may indicate synthetic or heavily compressed content")
         suspicious_flags += 1
 
-    # Try ffprobe for deep metadata
-    raw = _run_ffprobe(path)
-    parsed = _parse_metadata(raw) if raw else {}
-    if raw:
-        fmt = raw.get("format", {})
-        streams = raw.get("streams", [])
+    output = _run_ffmpeg_info(path)
+    parsed_raw = _parse_ffmpeg_output(output) if output else {}
 
-        # Check for missing encoder tag (real cameras usually write encoder info)
-        encoder = fmt.get("tags", {}).get("encoder", "") or fmt.get("tags", {}).get("ENCODER", "")
+    if output and parsed_raw:
+        encoder = parsed_raw.get("encoder", "")
         if not encoder:
             details.append("⚠ No encoder tag in metadata (common in synthetic media)")
             suspicious_flags += 1
         else:
             details.append(f"Encoder: {encoder}")
 
-        # Check creation time
-        creation = fmt.get("tags", {}).get("creation_time", "")
+        creation = parsed_raw.get("creation_time", "")
         if creation:
             details.append(f"Creation time: {creation}")
         else:
             details.append("⚠ No creation timestamp in metadata")
             suspicious_flags += 1
 
-        # Video stream check
-        video_streams = [s for s in streams if s.get("codec_type") == "video"]
-        audio_streams = [s for s in streams if s.get("codec_type") == "audio"]
-
-        if video_streams:
-            vs = video_streams[0]
-            codec = vs.get("codec_name", "unknown")
+        codec = parsed_raw.get("video_codec", "")
+        if codec:
             details.append(f"Video codec: {codec}")
-            # Unusual codecs can indicate re-encoding
             if codec not in ("h264", "hevc", "vp9", "vp8", "av1", "mpeg4"):
                 details.append(f"⚠ Uncommon video codec: {codec}")
                 suspicious_flags += 1
 
-        if not audio_streams:
+        audio = parsed_raw.get("audio_streams", 0)
+        if audio == 0:
             details.append("⚠ No audio stream detected")
             suspicious_flags += 1
         else:
-            details.append(f"Audio streams: {len(audio_streams)}")
-
+            details.append(f"Audio streams: {audio}")
     else:
-        details.append("ffprobe not available — deep metadata analysis skipped")
-        details.append("Install ffmpeg for full metadata inspection")
+        details.append("Could not read metadata")
 
-    # Score: each flag adds ~0.2
     score = min(1.0, suspicious_flags * 0.22)
+    confidence = 0.9 if output else 0.4
 
-    confidence = 0.9 if raw else 0.4
+    parsed = {
+        "creation_time":  parsed_raw.get("creation_time", ""),
+        "gps":            parsed_raw.get("gps"),
+        "make":           parsed_raw.get("make", ""),
+        "model":          parsed_raw.get("model", ""),
+        "encoder":        parsed_raw.get("encoder", ""),
+        "audio_language": parsed_raw.get("audio_language", ""),
+    }
 
     return AnalyzerResult(label=label, score=score, confidence=confidence, details=details), parsed

@@ -76,8 +76,11 @@ def analyze(frames: List[np.ndarray]) -> AnalyzerResult:
             f"json.dump(probs, open({repr(result_path)}, 'w'))\n"
         )
 
+        # Use Python 3.13 because onnxruntime doesn't support Python 3.14 yet
+        _PY313 = r"C:\Users\okhatib\AppData\Local\Programs\Python\Python313\python.exe"
+        py_exe = _PY313 if os.path.isfile(_PY313) else sys.executable
         proc = subprocess.run(
-            [sys.executable, "-c", script],
+            [py_exe, "-c", script],
             capture_output=True, text=True, timeout=120
         )
 
