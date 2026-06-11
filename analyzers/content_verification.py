@@ -683,9 +683,19 @@ def _save_debug(extracted: dict, transcript: str, video_path: str, meta: dict) -
 
 # ── Public entry point ────────────────────────────────────────────────────────
 
+def _load_api_key() -> str:
+    api_json = os.path.join(os.path.dirname(__file__), "..", "api.json")
+    try:
+        import json
+        with open(os.path.normpath(api_json)) as f:
+            return json.load(f).get("anthropic_api_key", "")
+    except Exception:
+        return os.environ.get("ANTHROPIC_API_KEY", "")
+
+
 def analyze(frames: List[np.ndarray], video_path: str = "", meta: Optional[dict] = None) -> AnalyzerResult:
     label = "Content Verification"
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    api_key = _load_api_key()
 
     if not _HAS_ANTHROPIC:
         _dlog("analyze: early return — anthropic not installed")
